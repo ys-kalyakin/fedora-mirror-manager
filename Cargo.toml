@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/fmm-core", "crates/fmm-apply", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+fmm-core = { path = "crates/fmm-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = "2"
+tauri-build = "2"
+thiserror = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

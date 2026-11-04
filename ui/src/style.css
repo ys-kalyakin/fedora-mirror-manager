@@ -1,0 +1,554 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --fedora-blue: #3c6eb4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  background: var(--fedora-blue);
+  color: #fff;
+  padding: 0.75rem 1rem;
+}
+
+.app-header__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1rem;
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* --------------------------------------------------------------- panels --- */
+
+.panel {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: #f3f4f6;
+  border-bottom: 1px solid #d1d5db;
+}
+
+.panel__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.panel__body {
+  padding: 0.75rem 1rem;
+}
+
+.panel__loading,
+.panel__empty {
+  color: #6b7280;
+}
+
+.panel__error {
+  color: #b91c1c;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.panel__warning {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.panel__hint {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.helper-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 0.55rem 0.8rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.helper-banner__text strong {
+  display: block;
+}
+
+.helper-banner__hint {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------- repo table --- */
+
+.repo-table {
+  width: 100%;
+  /* Fixed layout: a long unbreakable filename (e.g. a COPR repo file) must
+     not starve the URL column — columns keep their shares and long content
+     wraps inside its own cell. */
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+/* Column shares: repository, file, enabled, source, url, action. The URL
+   column (5th) takes the remaining space. */
+.repo-table th:nth-child(1) { width: 18%; }
+.repo-table th:nth-child(2) { width: 18%; }
+.repo-table th:nth-child(3) { width: 7%; }
+.repo-table th:nth-child(4) { width: 9%; }
+.repo-table th:nth-child(6) { width: 18%; }
+
+/* Long unbreakable content (COPR ids, repo file names) wraps inside its own
+   cell instead of painting over the next column. */
+.repo-table td {
+  overflow-wrap: anywhere;
+}
+
+.repo-table td:nth-child(2) {
+  font-size: 0.8rem;
+}
+
+.repo-table th,
+.repo-table td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: top;
+}
+
+.repo-table th {
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.repo-table__name {
+  font-weight: 600;
+}
+
+.repo-table__hint {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.repo-table__url {
+  max-width: 26rem;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: #4b5563;
+}
+
+.repo-table__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+/* --------------------------------------------------------------- badges --- */
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge--on {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge--off {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.badge--source-yandex {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.badge--source-hyperdedic {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.badge--source-metalink {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge--source-other {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.badge--source-none {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge--origin-packaged {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge--origin-local {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+/* ------------------------------------------------------------- buttons --- */
+
+.btn {
+  border: 1px solid #9ca3af;
+  background: #fff;
+  color: #1f2937;
+  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--fedora-blue);
+  color: var(--fedora-blue);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--fedora-blue);
+  border-color: var(--fedora-blue);
+  color: #fff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.1);
+}
+
+.btn--small {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------------ snapshots --- */
+
+.snapshot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.snapshot-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.snapshot-list__item:last-child {
+  border-bottom: none;
+}
+
+.snapshot-list__info {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.snapshot-list__timestamp {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.snapshot-list__tag {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+/* -------------------------------------------------------------- dialogs --- */
+
+/* Fixed overlay instead of the native <dialog>: WebKitGTK (Tauri on Linux)
+   renders showModal() dialogs without mouse input, blocking the window behind
+   an undismissable modal. */
+.fmm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.fmm-dialog {
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  max-width: 34rem;
+  max-height: 100%;
+  overflow-y: auto;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+}
+
+.dialog__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.dialog__intro {
+  margin: 0 0 0.6rem;
+}
+
+.dialog__row {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+/* Muted context line under a dialog__row (e.g. the packaged source of an
+   overriding copy on the F45+ layout). */
+.dialog__hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  overflow-wrap: anywhere;
+}
+
+.dialog__code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.dialog__removed {
+  margin: 0.4rem 0;
+  font-size: 0.85rem;
+}
+
+.dialog__removed-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.dialog__option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.7rem 0;
+  font-size: 0.9rem;
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.dialog__warning {
+  color: #92400e;
+}
+
+.dialog__error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.fmm-dialog--busy {
+  text-align: center;
+}
+
+/* ---------------------------------------------------------- status bar --- */
+
+.app-status {
+  border-top: 1px solid #d1d5db;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+}
+
+.app-status.status--error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .panel {
+    border-color: #374151;
+  }
+
+  .panel__header {
+    background: #1f2937;
+    border-bottom-color: #374151;
+  }
+
+  .repo-table th,
+  .repo-table td {
+    border-bottom-color: #374151;
+  }
+
+  .repo-table__url,
+  .repo-table__hint,
+  .panel__loading,
+  .panel__empty,
+  .panel__hint,
+  .dialog__hint,
+  .snapshot-list__tag {
+    color: #9ca3af;
+  }
+
+  .repo-table__url {
+    color: #9ca3af;
+  }
+
+  .badge--on {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+
+  .badge--off {
+    background: #1f2937;
+    color: #9ca3af;
+  }
+
+  .badge--source-yandex {
+    background: #713f12;
+    color: #fde68a;
+  }
+
+  .badge--source-hyperdedic {
+    background: #312e81;
+    color: #c7d2fe;
+  }
+
+  .badge--source-metalink {
+    background: #1e3a8a;
+    color: #bfdbfe;
+  }
+
+  .badge--source-other {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .badge--source-none {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+
+  .badge--origin-packaged {
+    background: #1e3a8a;
+    color: #bfdbfe;
+  }
+
+  .badge--origin-local {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .btn {
+    background: #1f2937;
+    border-color: #4b5563;
+    color: #e5e7eb;
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: #93c5fd;
+    color: #93c5fd;
+  }
+
+  .snapshot-list__item {
+    border-bottom-color: #374151;
+  }
+
+  .fmm-dialog {
+    border-color: #374151;
+    background: #111827;
+    color: #e5e7eb;
+  }
+
+  .dialog__warning {
+    color: #fbbf24;
+  }
+
+  .dialog__error {
+    color: #f87171;
+  }
+
+  .panel__warning {
+    background: #78350f;
+    border-color: #b45309;
+    color: #fde68a;
+  }
+
+  .helper-banner {
+    background: #78350f;
+    border-color: #b45309;
+  }
+
+  .helper-banner__hint {
+    color: #9ca3af;
+  }
+
+  .panel__error {
+    color: #f87171;
+  }
+
+  .app-status {
+    border-top-color: #374151;
+  }
+
+  .app-status.status--error {
+    color: #f87171;
+  }
+}

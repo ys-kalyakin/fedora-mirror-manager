@@ -1,0 +1,2 @@
+# Rustfmt defaults with intent made explicit.
+hard_tabs = false

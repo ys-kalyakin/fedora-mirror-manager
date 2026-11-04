@@ -1,0 +1,10 @@
+{
+  "name": "fedora-mirror-manager",
+  "private": true,
+  "description": "Tauri command entry point: tauri CLI must run from the project root so it can find src-tauri/tauri.conf.json",
+  "scripts": {
+    "dev": "npm --prefix ui run dev",
+    "build": "npm --prefix ui run build",
+    "tauri": "ui/node_modules/.bin/tauri"
+  }
+}

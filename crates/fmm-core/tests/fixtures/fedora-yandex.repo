@@ -1,0 +1,6 @@
+[fedora-yandex-example]
+name=Fedora already switched to Yandex (example)
+baseurl=https://mirror.yandex.ru/fedora/linux/releases/$releasever/Everything/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
