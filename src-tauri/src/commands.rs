@@ -380,15 +380,33 @@ fn helper_status_with(env_value: Option<&str>) -> HelperStatus {
 /// probe grants nothing and touches nothing. A helper too old to know the
 /// flag (or any exec failure) reports `None`; the banner treats that as
 /// outdated. The mode never reads stdin, so the probe cannot hang on it.
+///
+/// Spawning is retried briefly: on a busy host (a parallel test suite
+/// especially) a spawn can transiently fail with `EAGAIN`/`ETXTBSY`, and the
+/// probe must not report a perfectly current helper as too old because of
+/// that. A persistent failure still resolves to `None`.
 fn helper_plan_version(helper: &Path) -> Option<u32> {
-    let output = Command::new(helper)
-        .arg("version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .and_then(|child| child.wait_with_output())
-        .ok()?;
+    let mut output = None;
+    for delay_ms in [0u64, 10, 25] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        match Command::new(helper)
+            .arg("version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .and_then(|child| child.wait_with_output())
+        {
+            Ok(o) => {
+                output = Some(o);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    let output = output?;
     if !output.status.success() {
         return None;
     }
