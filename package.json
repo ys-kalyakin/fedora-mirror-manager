@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "npm --prefix ui run dev",
     "build": "npm --prefix ui run build",
+    "stage-helper": "bash scripts/stage-helper.sh",
+    "prebundle": "npm run stage-helper && npm --prefix ui run build",
     "tauri": "ui/node_modules/.bin/tauri"
   }
 }

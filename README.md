@@ -1,5 +1,7 @@
 # Fedora Mirror Manager
 
+[![CI](https://github.com/ys-kalyakin/fedora-mirror-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/ys-kalyakin/fedora-mirror-manager/actions/workflows/ci.yml)
+
 Desktop utility for managing Fedora dnf repository mirrors: discover available
 mirrors, compare them, and switch repositories between `metalink` and `baseurl`
 sources directly from the UI.
@@ -30,11 +32,44 @@ npm install --prefix ui   # first time only — installs frontend dependencies
 npm run tauri dev
 ```
 
+## Download releases
+
+Ready-to-run builds are published on the GitHub
+[Releases](https://github.com/ys-kalyakin/fedora-mirror-manager/releases) page
+for every `v*` tag (Linux x86_64, with `SHA256SUMS` to verify them):
+
+- **AppImage** — download, make executable, run:
+
+  ```sh
+  chmod +x fedora-mirror-manager_<version>_linux_x86_64.AppImage
+  ./fedora-mirror-manager_<version>_linux_x86_64.AppImage
+  ```
+
+  The privileged helper is bundled inside the image, so the one-click
+  **Install helper** flow in the app works out of the box.
+
+- **RPM** — install with the package manager and start Fedora Mirror Manager
+  from the menu or terminal:
+
+  ```sh
+  sudo dnf install ./fedora-mirror-manager_<version>_linux_x86_64.rpm
+  ```
+
+Privileged setup (helper + polkit policy) is performed from inside the app in
+both cases — see *Privileged helper installation* below.
+
 ## Release build
 
 ```sh
-npm run tauri build
+npm run tauri build -- --bundles appimage rpm
 ```
+
+This builds the UI, stages the release helper binary
+(`scripts/stage-helper.sh` runs automatically), compiles the workspace in
+release mode, and writes the bundles to
+`target/release/bundle/{appimage,rpm}`. The helper is bundled next to the app
+binary via Tauri `externalBin` — `npm run tauri dev` is unaffected and keeps
+using `target/debug/fmm-apply` per the README below.
 
 ## Tests and lints
 

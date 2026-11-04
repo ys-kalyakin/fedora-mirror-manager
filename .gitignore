@@ -1,6 +1,9 @@
 # Rust
 /target/
 
+# Staged sidecar for Tauri externalBin (created by scripts/stage-helper.sh)
+/src-tauri/binaries/
+
 # Node / frontend
 node_modules/
 dist/
