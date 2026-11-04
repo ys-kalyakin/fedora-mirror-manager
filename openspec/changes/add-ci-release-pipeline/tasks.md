@@ -18,7 +18,7 @@
 ## 4. Enable, verify, first release (outward-facing — confirm each push/tag with the user)
 
 - [x] 4.1 Run all three gates locally before pushing (`cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `npm --prefix ui run build`; on this machine cargo lives in the toolchain bin path, not rustup proxies). Fix trivial findings; anything pre-existing that should not block CI gets an explicit decision before 4.2. Verify: all three exit 0.
-- [ ] 4.2 Add the remote `git@github.com:ys-kalyakin/fedora-mirror-manager.git` as `origin` and push main (with the user's go-ahead). Verify: the push lands and a CI run starts on GitHub for the pushed commit.
+- [x] 4.2 Add the remote `git@github.com:ys-kalyakin/fedora-mirror-manager.git` as `origin` and push main (with the user's go-ahead). Verify: the push lands and a CI run starts on GitHub for the pushed commit.
 - [ ] 4.3 Watch the first CI run to green. Verify: `gh run watch` (or the Actions page) shows the run for the head commit green with all three gates executed.
 - [ ] 4.4 First release: bump the workspace version + `ui/package.json` version as the release checklist requires, tag `v0.1.0`, push the tag (with the user's go-ahead). Verify: the GitHub Release page offers the AppImage, the RPM, and `SHA256SUMS`; `sha256sum -c` matches on a downloaded copy; the downloaded AppImage launches and its **Install helper** flow installs `/usr/libexec/fmm-apply` and the policy after one authorization.
 

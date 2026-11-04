@@ -30,6 +30,9 @@ jobs:
       - name: Install UI dependencies
         run: npm ci --prefix ui
 
+      - name: Stage privileged helper sidecar (required by tauri-build)
+        run: npm run stage-helper
+
       - name: Rust tests
         run: cargo test --workspace
 

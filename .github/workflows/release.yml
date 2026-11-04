@@ -34,7 +34,6 @@ jobs:
 
       - name: Build bundles
         run: npm run tauri build -- --bundles appimage rpm
-
       - name: Collect and rename assets
         run: |
           version="${GITHUB_REF_NAME#v}"

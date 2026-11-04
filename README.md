@@ -74,10 +74,16 @@ using `target/debug/fmm-apply` per the README below.
 ## Tests and lints
 
 ```sh
+npm run stage-helper   # first time only — tauri-build requires the staged sidecar
 cargo test
 cargo clippy --workspace -- -D warnings
 cd ui && npm run build
 ```
+
+`cargo test` and `cargo clippy` compile `fmm-app`, whose `tauri-build` step
+verifies the `externalBin` sidecar declared in `tauri.conf.json` — that is the
+staged `fmm-apply` produced by `npm run stage-helper` (and, on release builds,
+automatically by `prebundle`).
 
 ## Privileged helper installation
 

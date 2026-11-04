@@ -106,10 +106,15 @@ proposal.md — Why; behavior contract: specs/ci-release/spec.md.
   crate version)] → Release checklist: bump `version` in the workspace
   Cargo.toml (and ui/package.json) as part of tagging; auto-sync is a
   possible follow-up, not v1.
-- [`externalBin` makes `tauri build` fail if the sidecar is absent] →
-  `beforeBuildCommand` stages it automatically (decision 4), so the failure
-  mode only appears if the script is bypassed (e.g. `cargo tauri build` run
-  from inside `src-tauri/`); README documents the supported entry point.
+- [`externalBin` makes **every** cargo build of `fmm-app` fail if the sidecar
+  is absent — not only bundling: `tauri-build` (build.rs) verifies the
+  declared sidecar path, so `cargo test`/`cargo clippy` break on a fresh
+  checkout too] → `beforeBuildCommand` stages it for bundle builds (decision
+  4), the CI test job runs `npm run stage-helper` explicitly before the
+  cargo gates, and the README's tests section documents the one-time staging
+  requirement. `tauri dev` is unaffected (no tauri-build sidecar check
+  beyond the same rule — the dev helper keeps resolving from
+  `target/debug/`).
 - [Publishing an accidental `v*` tag] → Release workflow has no delete or
   edit powers beyond its own release; deleting a bad tag/release on GitHub
   is a two-click manual rollback.
