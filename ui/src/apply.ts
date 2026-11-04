@@ -1,4 +1,4 @@
-import type { ApplyReport, CmdErrorPayload, PlanPreview } from "./api";
+import type { ApplyReport, BulkFilePreview, BulkPreview, CmdErrorPayload, Mirror, PlanPreview } from "./api";
 import { api, notifyApplied } from "./api";
 import { el } from "./dom";
 
@@ -133,8 +133,115 @@ export function confirmPlan(
   });
 }
 
-/** Opens the restore confirmation dialog with purge/refresh options. */
-export function confirmRestore(
+/** Display names for the mirrors (the wire values are kebab-case). */
+const MIRROR_LABELS: Record<Mirror, string> = { yandex: "Yandex", hyperdedic: "HyperDedic" };
+
+/** One file group of the bulk confirmation dialog: target marking + sections. */
+function bulkFileGroup(file: BulkFilePreview): HTMLElement {
+  const group = el("div", "dialog__file-group", "");
+  if (file.creates_file) {
+    group.append(el("p", "dialog__row", `New file: ${file.target_path}`));
+    if (file.source_path) {
+      group.append(el("p", "dialog__row dialog__hint", `Will be created — overrides ${file.source_path}`));
+    }
+  } else {
+    group.append(el("p", "dialog__row", `File: ${file.target_path}`));
+    if (file.source_path) {
+      group.append(el("p", "dialog__row dialog__hint", `Rewritten in place — content rebuilt from ${file.source_path}`));
+    }
+  }
+  const list = el("ul", "dialog__file-sections", "");
+  for (const section of file.sections) {
+    const item = el("li", "dialog__file-section", "");
+    const urlRow = el("p", "dialog__row", "");
+    urlRow.append(el("strong", "", section.repo_id), document.createTextNode(" → "));
+    urlRow.append(el("code", "dialog__code", section.new_baseurl));
+    item.append(urlRow);
+    if (section.removed_lines.length > 0) {
+      const removed = el("details", "dialog__removed", "");
+      removed.append(el("summary", "", `Replace ${section.removed_lines.length} source line(s)`));
+      const removedList = el("ul", "dialog__removed-list", "");
+      for (const line of section.removed_lines) {
+        removedList.append(el("li", "dialog__code", line));
+      }
+      removed.append(removedList);
+      item.append(removed);
+    }
+    list.append(item);
+  }
+  group.append(list);
+  return group;
+}
+
+/**
+ * Confirmation dialog for a bulk switch: every affected file with its
+ * sections and new baseurls, the skipped repositories with reasons, and the
+ * cache-refresh option. Resolves when the user closes the dialog.
+ */
+export function confirmBulkPlan(
+  mirror: Mirror,
+  preview: BulkPreview,
+  defaultRefresh: boolean,
+): Promise<Confirmation> {
+  return new Promise((resolve) => {
+    closeOpenModals();
+    const modal = openModal();
+    const finish = (confirmed: boolean) => {
+      modal.close();
+      resolve({ confirmed, refreshCache });
+    };
+    const label = MIRROR_LABELS[mirror];
+    const repoCount = preview.files.reduce((count, file) => count + file.sections.length, 0);
+    const dialog = el("div", "fmm-dialog", "");
+    dialog.append(el("h3", "dialog__title", `Switch all to ${label}`));
+    dialog.append(
+      el(
+        "p",
+        "dialog__intro",
+        `${repoCount} ${repoCount === 1 ? "repository" : "repositories"} in ${preview.files.length} ${preview.files.length === 1 ? "file" : "files"} will be switched to ${label}.`,
+      ),
+    );
+
+    const fileList = el("div", "dialog__bulk-files", "");
+    for (const file of preview.files) {
+      fileList.append(bulkFileGroup(file));
+    }
+    dialog.append(fileList);
+
+    if (preview.skipped.length > 0) {
+      const skipped = el("details", "dialog__removed", "");
+      skipped.append(el("summary", "", `Skipped repositories (${preview.skipped.length})`));
+      const list = el("ul", "dialog__removed-list", "");
+      for (const skip of preview.skipped) {
+        list.append(el("li", "dialog__code", `${skip.repo_id}: ${skip.reason}`));
+      }
+      skipped.append(list);
+      dialog.append(skipped);
+    }
+
+    let refreshCache = defaultRefresh;
+    const refreshBox = el("input", "dialog__checkbox", "") as HTMLInputElement;
+    refreshBox.type = "checkbox";
+    refreshBox.checked = defaultRefresh;
+    refreshBox.addEventListener("change", () => {
+      refreshCache = refreshBox.checked;
+    });
+    const refreshLabel = el("label", "dialog__option", "");
+    refreshLabel.append(refreshBox, document.createTextNode("Refresh package cache (dnf clean all && dnf makecache)"));
+    dialog.append(refreshLabel);
+
+    const actions = el("div", "dialog__actions", "");
+    const cancel = el("button", "btn", "Cancel");
+    const apply = el("button", "btn btn--primary", "Apply…");
+    cancel.addEventListener("click", () => finish(false));
+    apply.addEventListener("click", () => finish(true));
+    actions.append(cancel, apply);
+    dialog.append(actions);
+    modal.root.append(dialog);
+  });
+}
+
+/** Opens the restore confirmation dialog with purge/refresh options. */export function confirmRestore(
   snapshotId: string,
   extraFiles: string[],
   defaultRefresh: boolean,

@@ -119,6 +119,17 @@ pub fn preview_action(
     )?)
 }
 
+/// Builds the bulk plan (or a no-change outcome) for switching every
+/// repository the mirror carries to that mirror in one batch.
+#[tauri::command]
+pub fn preview_bulk_switch(
+    _state: tauri::State<AppState>,
+    mirror: fmm_core::catalog::Mirror,
+) -> Result<fmm_core::bulk::BulkOutcome, CmdError> {
+    let locations = RepoLocations::detect();
+    Ok(fmm_core::bulk::build_bulk_plan(&locations, mirror)?)
+}
+
 /// `*.repo` files a restore would keep (or purge) because the snapshot
 /// predates them.
 #[tauri::command]

@@ -14,6 +14,7 @@ pub fn run() {
             commands::list_repos,
             commands::list_snapshots,
             commands::preview_action,
+            commands::preview_bulk_switch,
             commands::preview_restore,
             commands::apply_plan,
             commands::apply_restore,

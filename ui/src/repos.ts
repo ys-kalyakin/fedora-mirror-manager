@@ -2,6 +2,7 @@ import type { Inventory, Layout, RepoEntry, Source } from "./api";
 import { api, isRpmFusion, notifyApplied, type Mirror } from "./api";
 import {
   anyDialogOpen,
+  confirmBulkPlan,
   confirmPlan,
   helperBanner,
   showErrorDialog,
@@ -10,6 +11,14 @@ import {
   showBusy,
 } from "./apply";
 import { el } from "./dom";
+
+/** The mirrors offered by the bulk actions, in offer order. */
+const BULK_MIRRORS: Mirror[] = ["yandex", "hyperdedic"];
+
+const MIRROR_LABELS: Record<Mirror, string> = {
+  yandex: "Yandex",
+  hyperdedic: "HyperDedic",
+};
 
 const SOURCE_LABELS: Record<Source, string> = {
   yandex: "Yandex",
@@ -34,9 +43,16 @@ const EMPTY_LABELS: Record<Layout, string> = {
 export function initRepos(container: HTMLElement): void {
   const header = el("div", "panel__header", "");
   header.append(el("h2", "panel__title", "Repositories"));
+  // Bulk actions live in the panel header, next to Refresh (user's choice):
+  // one button per mirror switches everything it can in one batch.
+  const headerActions = el("div", "panel__actions", "");
+  for (const mirror of BULK_MIRRORS) {
+    headerActions.append(bulkButton(mirror));
+  }
   const refresh = el("button", "btn", "Refresh");
   refresh.addEventListener("click", () => void load());
-  header.append(refresh);
+  headerActions.append(refresh);
+  header.append(headerActions);
 
   const body = el("div", "panel__body", "");
   container.append(header, body);
@@ -139,8 +155,50 @@ export function initRepos(container: HTMLElement): void {
     return tr;
   }
 
-  function mirrorButton(entry: RepoEntry, mirror: Mirror): HTMLButtonElement {
-    const button = el("button", "btn btn--small", `→ ${mirror === "yandex" ? "Yandex" : "HyperDedic"}`);
+  /** Bulk action: switches every repository that can be switched to the mirror. */
+  function bulkButton(mirror: Mirror): HTMLButtonElement {
+    const label = MIRROR_LABELS[mirror];
+    const button = el("button", "btn btn--small", `All → ${label}`);
+    button.title =
+      mirror === "hyperdedic"
+        ? "Switches every repository that can be switched to HyperDedic (RPM Fusion repositories are not mirrored there). Enabled flags are unchanged."
+        : "Switches every repository that can be switched to Yandex. Enabled flags are unchanged.";
+    button.addEventListener("click", () => void planBulkSwitch(mirror));
+    return button;
+  }
+
+  async function planBulkSwitch(mirror: Mirror): Promise<void> {
+    // A modal is up: this click is a leftover double-click, not a new action.
+    if (anyDialogOpen()) {
+      return;
+    }
+    const label = MIRROR_LABELS[mirror];
+    try {
+      const outcome = await api.previewBulkSwitch(mirror);
+      if (outcome.outcome === "no-change") {
+        showNoChange(outcome.reason);
+        return;
+      }
+      const decision = await confirmBulkPlan(mirror, outcome.preview, true);
+      if (!decision.confirmed) {
+        return;
+      }
+      const busy = showBusy(`Waiting for authorization and switching everything possible to ${label}…`);
+      try {
+        const report = await api.applyPlan(outcome.plan, decision.refreshCache);
+        showReport(report);
+        notifyApplied();
+      } catch (err) {
+        showErrorDialog(err as { code: string; message: string });
+      } finally {
+        busy.close();
+      }
+    } catch (err) {
+      showErrorDialog(err as { code: string; message: string });
+    }
+  }
+
+  function mirrorButton(entry: RepoEntry, mirror: Mirror): HTMLButtonElement {    const button = el("button", "btn btn--small", `→ ${mirror === "yandex" ? "Yandex" : "HyperDedic"}`);
     if (mirror === "hyperdedic" && isRpmFusion(entry.kind)) {
       button.disabled = true;
       button.title = "HyperDedic does not mirror RPM Fusion repositories";

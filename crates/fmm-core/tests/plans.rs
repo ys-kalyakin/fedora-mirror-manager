@@ -533,3 +533,388 @@ fn f45_cisco_modes_target_the_shadow_too() {
             .contains("[fedora-cisco-openh264]\nenabled=0")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bulk switch (one mirror → every switchable repository it carries)
+// ---------------------------------------------------------------------------
+
+use fmm_core::bulk::{BulkOutcome, build_bulk_plan};
+
+/// Writes a two-section combo file: EPEL testing + EPEL modular, both metalink.
+fn write_combo_repo(dir: &Path) {
+    std::fs::write(
+        dir.join("combo.repo"),
+        "[epel-testing]\n\
+         name=EPEL testing\n\
+         metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-testing\n\
+         enabled=0\n\
+         gpgcheck=1\n\
+         \n\
+         [epel-modular]\n\
+         name=EPEL modular\n\
+         metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-modular\n\
+         enabled=0\n\
+         gpgcheck=1\n",
+    )
+    .unwrap();
+}
+
+fn expect_bulk_plan(
+    outcome: BulkOutcome,
+) -> (fmm_core::bulk::BulkPreview, fmm_core::plan::ApplyPlan) {
+    match outcome {
+        BulkOutcome::Plan { preview, plan } => (preview, plan),
+        BulkOutcome::NoChange { reason, skipped } => {
+            panic!("expected a bulk plan, got NoChange: {reason} (skipped: {skipped:?})")
+        }
+    }
+}
+
+#[test]
+fn bulk_yandex_switches_every_switchable_repository() {
+    let dir = common::fixture_repo_dir();
+    let (preview, plan) = expect_bulk_plan(
+        build_bulk_plan(&RepoLocations::legacy(&dir), Mirror::Yandex).expect("plan"),
+    );
+
+    // Everything switchable and not yet Yandex is in the batch, as one file
+    // rewrite per .repo file; the snapshot covers the whole batch.
+    assert_eq!(plan.snapshot_tag, "switch-all-yandex");
+    assert_eq!(plan.action, PlanAction::Switch);
+    assert!(!plan.refresh_cache);
+    let mut paths: Vec<&str> = plan
+        .files
+        .iter()
+        .map(|f| f.path.rsplit('/').next().unwrap())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        vec![
+            "epel.repo",
+            "fedora-updates-testing.repo",
+            "fedora-updates.repo",
+            "fedora.repo",
+            "rpmfusion-free.repo",
+            "rpmfusion-nonfree-updates.repo",
+        ]
+    );
+    // Per-file hash guards: each matches the current on-disk content.
+    for file in &plan.files {
+        let current = std::fs::read_to_string(&file.path).unwrap();
+        assert_eq!(
+            file.before_sha256,
+            fmm_core::plan::sha256_hex(current.as_bytes())
+        );
+    }
+    // The fedora section received the Yandex baseurl and lost the metalink;
+    // the non-switchable fedora-debuginfo section is byte-identical.
+    let fedora = &plan
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("fedora.repo"))
+        .unwrap()
+        .content;
+    assert!(fedora.contains("baseurl=https://mirror.yandex.ru/fedora/linux/releases/$releasever/Everything/$basearch/os/"));
+    // The fedora section lost its metalink (the not-switchable
+    // fedora-debuginfo section below keeps its own, byte-identical).
+    assert!(!fedora.contains("metalink?repo=fedora-$releasever"));
+    assert!(
+        fedora
+            .contains("[fedora-debuginfo]\nname=Fedora $releasever - $basearch - Debug\nmetalink=")
+    );
+
+    // Already-on-mirror is reported, everything else excluded is silent.
+    let already: Vec<_> = preview
+        .skipped
+        .iter()
+        .filter(|s| s.repo_id == "fedora-yandex-example")
+        .collect();
+    assert_eq!(already.len(), 1);
+    assert_eq!(already[0].reason, "already on the Yandex mirror");
+    assert!(preview.files.iter().all(|f| !f.creates_file));
+    assert!(preview.files.iter().all(|f| f.source_path.is_none()));
+}
+
+#[test]
+fn bulk_hyperdedic_skips_rpmfusion_with_reason() {
+    let dir = common::fixture_repo_dir();
+    let (preview, plan) = expect_bulk_plan(
+        build_bulk_plan(&RepoLocations::legacy(&dir), Mirror::Hyperdedic).expect("plan"),
+    );
+
+    let names: Vec<&str> = plan
+        .files
+        .iter()
+        .map(|f| f.path.rsplit('/').next().unwrap())
+        .collect();
+    // Fedora and EPEL only: no RPM Fusion file is touched. The Yandex example
+    // file IS a candidate here — it is not on HyperDedic yet.
+    assert_eq!(names.len(), 5);
+    assert!(!names.iter().any(|n| n.contains("rpmfusion")));
+    let skipped: Vec<_> = preview
+        .skipped
+        .iter()
+        .filter(|s| s.repo_id.starts_with("rpmfusion"))
+        .collect();
+    assert_eq!(skipped.len(), 2);
+    for skip in skipped {
+        assert_eq!(
+            skip.reason,
+            "HyperDedic does not mirror RPM Fusion repositories"
+        );
+    }
+}
+
+#[test]
+fn bulk_merges_two_sections_of_one_file_into_one_rewrite() {
+    let dir = common::fixture_repo_dir();
+    write_combo_repo(&dir);
+    let (preview, plan) = expect_bulk_plan(
+        build_bulk_plan(&RepoLocations::legacy(&dir), Mirror::Yandex).expect("plan"),
+    );
+
+    // Exactly one plan entry for combo.repo carrying both sections; the
+    // baseurl lands directly under each header, URL lines are gone.
+    let combo: Vec<_> = plan
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with("combo.repo"))
+        .collect();
+    assert_eq!(combo.len(), 1);
+    let entry = combo[0];
+    assert!(entry.content.contains(
+        "baseurl=https://mirror.yandex.ru/fedora/epel/testing/$releasever/Everything/$basearch/"
+    ));
+    assert!(
+        entry.content.contains(
+            "baseurl=https://mirror.yandex.ru/fedora/epel/$releasever/Modular/$basearch/"
+        )
+    );
+    assert!(!entry.content.contains("metalink="));
+    // Both sections keep their non-URL lines.
+    assert!(entry.content.contains(
+        "[epel-testing]\nbaseurl=https://mirror.yandex.ru/fedora/epel/testing/$releasever/Everything/$basearch/\nname=EPEL testing\nenabled=0\ngpgcheck=1"
+    ));
+    assert!(entry.content.contains("[epel-modular]"));
+    // One preview group with two sections, removed lines per section.
+    let preview_combo: Vec<_> = preview
+        .files
+        .iter()
+        .filter(|f| f.file == "combo.repo")
+        .collect();
+    assert_eq!(preview_combo.len(), 1);
+    assert_eq!(preview_combo[0].sections.len(), 2);
+    let ids: Vec<&str> = preview_combo[0]
+        .sections
+        .iter()
+        .map(|s| s.repo_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["epel-testing", "epel-modular"]);
+    assert!(
+        preview_combo[0]
+            .sections
+            .iter()
+            .all(|s| s.removed_lines.len() == 1)
+    );
+}
+
+#[test]
+fn bulk_f45_creates_one_overriding_copy_per_packaged_file() {
+    let (packaged, local) = common::fixture_f45_dirs();
+    write_combo_repo(&packaged);
+    let locations = RepoLocations::f45_plus(&packaged, &local);
+    let (preview, plan) =
+        expect_bulk_plan(build_bulk_plan(&locations, Mirror::Yandex).expect("plan"));
+
+    let combo: Vec<_> = plan
+        .files
+        .iter()
+        .filter(|f| f.path == local.join("combo.repo").to_string_lossy())
+        .collect();
+    assert_eq!(combo.len(), 1, "one overriding copy for two sections");
+    assert_eq!(combo[0].before_sha256, "", "create sentinel");
+    assert!(combo[0].content.contains(
+        "[epel-testing]\nbaseurl=https://mirror.yandex.ru/fedora/epel/testing/$releasever/Everything/$basearch/"
+    ));
+    // The packaged location is never written.
+    assert!(
+        plan.files
+            .iter()
+            .all(|f| !f.path.starts_with(packaged.to_string_lossy().as_ref()))
+    );
+    let before_packaged = std::fs::read_to_string(packaged.join("combo.repo")).unwrap();
+    assert_eq!(
+        fmm_core::plan::sha256_hex(before_packaged.as_bytes()),
+        fmm_core::plan::sha256_hex(&std::fs::read(packaged.join("combo.repo")).unwrap())
+    );
+    // Preview: created file, derived from the packaged source, both sections.
+    let pv = preview
+        .files
+        .iter()
+        .find(|f| f.file == "combo.repo")
+        .unwrap();
+    assert!(pv.creates_file);
+    assert_eq!(
+        pv.source_path.as_deref(),
+        Some(packaged.join("combo.repo").to_string_lossy().as_ref())
+    );
+    assert_eq!(pv.sections.len(), 2);
+}
+
+#[test]
+fn bulk_f45_rewrites_existing_shadow_in_place_from_the_packaged_source() {
+    let (packaged, local) = common::fixture_f45_dirs();
+    write_combo_repo(&packaged);
+    // An outdated shadow: same sections, but missing a packaged update line.
+    std::fs::write(
+        local.join("combo.repo"),
+        "[epel-testing]\nname=EPEL testing\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=epel-testing\nenabled=0\n\n[epel-modular]\nname=EPEL modular\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=epel-modular\nenabled=0\n",
+    )
+    .unwrap();
+    // Simulate a package update that touched the packaged file after the shadow.
+    let packaged_text = std::fs::read_to_string(packaged.join("combo.repo")).unwrap();
+    let drifted = packaged_text.replacen("gpgcheck=1", "gpgcheck=1\nmetadata_expire=6h", 1);
+    assert_ne!(drifted, packaged_text);
+    std::fs::write(packaged.join("combo.repo"), drifted).unwrap();
+
+    let locations = RepoLocations::f45_plus(&packaged, &local);
+    let (preview, plan) =
+        expect_bulk_plan(build_bulk_plan(&locations, Mirror::Yandex).expect("plan"));
+
+    let combo: Vec<_> = plan
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with("combo.repo"))
+        .collect();
+    assert_eq!(combo.len(), 1);
+    // Rewritten in place (no create sentinel), rebuilt from the CURRENT
+    // packaged file: the drift line is carried over, both sections switched.
+    assert_ne!(combo[0].before_sha256, "");
+    let shadow_now = std::fs::read_to_string(local.join("combo.repo")).unwrap();
+    assert_eq!(
+        combo[0].before_sha256,
+        fmm_core::plan::sha256_hex(shadow_now.as_bytes())
+    );
+    assert!(combo[0].content.contains("metadata_expire=6h"));
+    assert!(
+        combo[0]
+            .content
+            .contains("baseurl=https://mirror.yandex.ru/fedora/epel/testing/")
+    );
+    assert!(!combo[0].content.contains("metalink="));
+    let pv = preview
+        .files
+        .iter()
+        .find(|f| f.file == "combo.repo")
+        .unwrap();
+    assert!(!pv.creates_file);
+    assert_eq!(
+        pv.source_path.as_deref(),
+        Some(packaged.join("combo.repo").to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn bulk_conflicting_dest_is_a_skip_not_a_batch_error() {
+    // Fresh dirs (no other fixture repos): the conflicting combo file is the
+    // only candidate, so the outcome must be NoChange with the skips.
+    let packaged = common::empty_dir();
+    let local = common::empty_dir();
+    write_combo_repo(&packaged);
+    // A local file with the packaged file's name that does not define the
+    // sections: the single-switch conflict guard, as a per-repository skip.
+    std::fs::write(
+        local.join("combo.repo"),
+        "[unrelated]\nname=Unrelated\nenabled=1\n",
+    )
+    .unwrap();
+    let locations = RepoLocations::f45_plus(&packaged, &local);
+
+    let outcome = build_bulk_plan(&locations, Mirror::Yandex).expect("planning succeeds");
+    match outcome {
+        BulkOutcome::NoChange { skipped, .. } => {
+            let conflicts: Vec<_> = skipped
+                .iter()
+                .filter(|s| s.repo_id == "epel-testing" || s.repo_id == "epel-modular")
+                .collect();
+            assert_eq!(conflicts.len(), 2);
+            assert!(conflicts.iter().all(|s| {
+                s.reason
+                    .contains("an overriding file named combo.repo already exists")
+            }));
+        }
+        BulkOutcome::Plan { .. } => panic!("conflicting sections must not be planned"),
+    }
+}
+
+#[test]
+fn bulk_everything_already_on_the_mirror_is_nochange() {
+    let dir = common::empty_dir();
+    std::fs::write(
+        dir.join("yandex.repo"),
+        "[fedora]\nname=Fedora\nbaseurl=https://mirror.yandex.ru/fedora/linux/releases/$releasever/Everything/$basearch/os/\nenabled=1\n",
+    )
+    .unwrap();
+    let outcome = build_bulk_plan(&RepoLocations::legacy(&dir), Mirror::Yandex).expect("plan");
+    match outcome {
+        BulkOutcome::NoChange { reason, skipped } => {
+            assert_eq!(reason, "nothing to switch to the Yandex mirror");
+            let already: Vec<_> = skipped.iter().filter(|s| s.repo_id == "fedora").collect();
+            assert_eq!(already.len(), 1);
+            assert_eq!(already[0].reason, "already on the Yandex mirror");
+        }
+        BulkOutcome::Plan { .. } => panic!("nothing to switch, expected NoChange"),
+    }
+}
+
+#[test]
+fn bulk_f45_unreadable_packaged_sibling_falls_back_to_the_shadow_content() {
+    let packaged = common::empty_dir();
+    let local = common::empty_dir();
+    // The packaged sibling of the same name is unreadable (inventory surfaces
+    // this as a file error), while the local shadow is valid and effective.
+    std::fs::write(packaged.join("combo.repo"), [0xff, 0xfe, 0x00]).unwrap();
+    write_combo_repo(&local);
+    let locations = RepoLocations::f45_plus(&packaged, &local);
+
+    let (preview, plan) =
+        expect_bulk_plan(build_bulk_plan(&locations, Mirror::Yandex).expect("plan"));
+    let combo: Vec<_> = plan
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with("combo.repo"))
+        .collect();
+    assert_eq!(
+        combo.len(),
+        1,
+        "the shadow is rewritten from its own content"
+    );
+    assert_ne!(combo[0].before_sha256, "");
+    assert!(
+        combo[0]
+            .content
+            .contains("baseurl=https://mirror.yandex.ru/fedora/epel/testing/")
+    );
+    let pv = preview
+        .files
+        .iter()
+        .find(|f| f.file == "combo.repo")
+        .unwrap();
+    // Fallback: no packaged source is named in the preview.
+    assert!(!pv.creates_file);
+    assert_eq!(pv.source_path, None);
+}
+
+#[test]
+fn bulk_empty_repo_directory_is_nochange() {
+    let dir = common::empty_dir();
+    let outcome = build_bulk_plan(&RepoLocations::legacy(&dir), Mirror::Yandex).expect("plan");
+    match outcome {
+        BulkOutcome::NoChange { reason, skipped } => {
+            assert_eq!(reason, "nothing to switch to the Yandex mirror");
+            assert!(skipped.is_empty());
+        }
+        BulkOutcome::Plan { .. } => panic!("empty directory, expected NoChange"),
+    }
+}

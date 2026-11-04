@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::classify::RepoKey;
+use crate::reposd::Source;
 
 /// The mirrors known to the application, in offer order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +32,22 @@ impl Mirror {
         match self {
             Mirror::Yandex => "Yandex",
             Mirror::Hyperdedic => "HyperDedic",
+        }
+    }
+
+    /// Lowercase slug used in snapshot tags (`switch-updates-yandex`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            Mirror::Yandex => "yandex",
+            Mirror::Hyperdedic => "hyperdedic",
+        }
+    }
+
+    /// Source classification a repository carries while pointing at this mirror.
+    pub fn source(self) -> Source {
+        match self {
+            Mirror::Yandex => Source::Yandex,
+            Mirror::Hyperdedic => Source::Hyperdedic,
         }
     }
 }
@@ -83,7 +100,8 @@ pub fn baseurl(mirror: Mirror, key: RepoKey) -> Option<String> {
     Some(url)
 }
 
-fn is_rpmfusion(key: RepoKey) -> bool {
+/// True for RPM Fusion families (HyperDedic mirrors only Fedora and EPEL).
+pub fn is_rpmfusion(key: RepoKey) -> bool {
     matches!(
         key,
         RepoKey::RfFree

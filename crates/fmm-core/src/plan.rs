@@ -219,7 +219,7 @@ pub fn build_action_plan(
             (
                 Some(url),
                 None,
-                format!("switch-{}-{}", repo_id, mirror_label(*mirror)),
+                format!("switch-{}-{}", repo_id, mirror.slug()),
             )
         }
         RepoAction::Cisco { mode } => match mode {
@@ -394,13 +394,6 @@ fn no_change_reason(action: &RepoAction) -> String {
     match action {
         RepoAction::Switch { mirror } => format!("already on the {} mirror", mirror.label()),
         RepoAction::Cisco { .. } => "already in the requested state".to_string(),
-    }
-}
-
-fn mirror_label(mirror: Mirror) -> &'static str {
-    match mirror {
-        Mirror::Yandex => "yandex",
-        Mirror::Hyperdedic => "hyperdedic",
     }
 }
 

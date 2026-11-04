@@ -4,6 +4,7 @@
 //! (`.repo` parsing, classification, mirror catalog, plans, snapshots),
 //! independent of any UI framework.
 
+pub mod bulk;
 pub mod catalog;
 pub mod classify;
 pub mod error;

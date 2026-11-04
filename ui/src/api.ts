@@ -97,6 +97,41 @@ export type PlanOutcome =
   | { outcome: "no-change"; reason: string }
   | { outcome: "plan"; preview: PlanPreview; plan: ApplyPlan };
 
+/** One rewritten section inside a bulk file preview. */
+export interface BulkSectionPreview {
+  repo_id: string;
+  new_baseurl: string;
+  removed_lines: string[];
+}
+
+/** One file the bulk plan writes (or creates), for the preview dialog. */
+export interface BulkFilePreview {
+  file: string;
+  target_path: string;
+  /** The target file does not exist yet and will be created by the helper. */
+  creates_file: boolean;
+  /** Packaged .repo file the new content derives from, if any. */
+  source_path: string | null;
+  sections: BulkSectionPreview[];
+}
+
+/** A repository excluded from the bulk switch, with the reason. */
+export interface BulkSkip {
+  repo_id: string;
+  reason: string;
+}
+
+/** Combined preview of a bulk switch. */
+export interface BulkPreview {
+  mirror: Mirror;
+  files: BulkFilePreview[];
+  skipped: BulkSkip[];
+}
+
+export type BulkOutcome =
+  | { outcome: "no-change"; reason: string; skipped: BulkSkip[] }
+  | { outcome: "plan"; preview: BulkPreview; plan: ApplyPlan };
+
 /** Error shape every backend failure is normalized to. */
 export interface CmdErrorPayload {
   code: string;
@@ -137,6 +172,8 @@ export const api = {
   listSnapshots: () => call<SnapshotInfo[]>("list_snapshots"),
   previewAction: (repoId: string, action: RepoAction) =>
     call<PlanOutcome>("preview_action", { repoId, action }),
+  previewBulkSwitch: (mirror: Mirror) =>
+    call<BulkOutcome>("preview_bulk_switch", { mirror }),
   previewRestore: (snapshotId: string) => call<string[]>("preview_restore", { snapshotId }),
   applyPlan: (plan: ApplyPlan, refreshCache: boolean) =>
     call<ApplyReport>("apply_plan", { plan, refreshCache }),

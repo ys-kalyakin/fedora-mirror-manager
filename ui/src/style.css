@@ -194,6 +194,13 @@ body {
   gap: 0.35rem;
 }
 
+/* Bulk switch + refresh buttons in the repositories panel header. */
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 /* --------------------------------------------------------------- badges --- */
 
 .badge {
@@ -397,6 +404,38 @@ body {
   padding-left: 1.2rem;
 }
 
+/* Bulk confirmation dialog: one scrollable group per affected file. */
+.dialog__bulk-files {
+  max-height: 45vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.9rem;
+  margin: 0.6rem 0;
+  padding-right: 0.25rem;
+}
+
+.dialog__file-group {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 0.4rem;
+}
+
+.dialog__file-group > .dialog__row {
+  margin: 0.15rem 0;
+}
+
+.dialog__file-sections {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.dialog__file-section > .dialog__row {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .dialog__option {
   display: flex;
   align-items: center;
@@ -441,6 +480,10 @@ body {
 @media (prefers-color-scheme: dark) {
   .panel {
     border-color: #374151;
+  }
+
+  .dialog__file-group {
+    border-top-color: #374151;
   }
 
   .panel__header {

@@ -393,3 +393,81 @@ fn restore_plan_without_snapshot_path_is_rejected() {
     assert!(!report.ok);
     assert_eq!(report.code.as_deref(), Some("bad_plan"));
 }
+
+const REPO_B: &str = "[updates]\nname=Updates\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=updates\ngpgcheck=1\n";
+
+/// Bulk-flow contract: a multi-file switch plan writes every file under one
+/// snapshot, and one stale file aborts the whole batch before any write.
+#[test]
+fn multi_file_switch_writes_every_file_under_one_snapshot() {
+    let work = temp_dir("multi");
+    let repo_dir = work.join("repos");
+    let snap_root = work.join("snaps");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo_a = repo_dir.join("fedora.repo");
+    let repo_b = repo_dir.join("fedora-updates.repo");
+    fs::write(&repo_a, REPO_A).unwrap();
+    fs::write(&repo_b, REPO_B).unwrap();
+
+    let new_a = "[fedora]\nname=Fedora\nbaseurl=https://mirror.yandex.ru/fedora/linux/releases/$releasever/Everything/$basearch/os/\ngpgcheck=1\n";
+    let new_b = "[updates]\nname=Updates\nbaseurl=https://mirror.yandex.ru/fedora/linux/updates/$releasever/Everything/$basearch/\ngpgcheck=1\n";
+    let mut plan = switch_plan(&repo_a, new_a);
+    let file_b = fmm_core::plan::PlanFile {
+        path: repo_b.to_string_lossy().into_owned(),
+        before_sha256: fmm_core::plan::sha256_hex(&fs::read(&repo_b).unwrap()),
+        content: new_b.to_string(),
+    };
+    plan.snapshot_tag = "switch-all-yandex".to_string();
+    plan.files.push(file_b);
+
+    let stub = dnf_stub(&work, 0);
+    let report = run_helper(&plan, &repo_dir, &snap_root, &stub, &work.join("dnf.log"));
+
+    assert!(report.ok, "report: {report:?}");
+    // Both files written and reported, one snapshot covering both.
+    assert_eq!(report.changed.len(), 2);
+    assert_eq!(fs::read_to_string(&repo_a).unwrap(), new_a);
+    assert_eq!(fs::read_to_string(&repo_b).unwrap(), new_b);
+    let snap = report.snapshot.expect("snapshot");
+    assert_eq!(
+        fs::read_to_string(Path::new(&snap).join("fedora.repo")).unwrap(),
+        REPO_A
+    );
+    assert_eq!(
+        fs::read_to_string(Path::new(&snap).join("fedora-updates.repo")).unwrap(),
+        REPO_B
+    );
+}
+
+#[test]
+fn one_stale_file_in_a_multi_file_plan_writes_nothing() {
+    let work = temp_dir("multi-stale");
+    let repo_dir = work.join("repos");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo_a = repo_dir.join("fedora.repo");
+    let repo_b = repo_dir.join("fedora-updates.repo");
+    fs::write(&repo_a, REPO_A).unwrap();
+    fs::write(&repo_b, REPO_B).unwrap();
+
+    let mut plan = switch_plan(&repo_a, "[fedora]\nname=New\n");
+    plan.files.push(fmm_core::plan::PlanFile {
+        path: repo_b.to_string_lossy().into_owned(),
+        before_sha256: "0".repeat(64), // stale: does not match disk
+        content: "[updates]\nname=New\n".to_string(),
+    });
+
+    let stub = dnf_stub(&work, 0);
+    let report = run_helper(
+        &plan,
+        &repo_dir,
+        &work.join("snaps"),
+        &stub,
+        &work.join("dnf.log"),
+    );
+
+    assert!(!report.ok);
+    assert_eq!(report.code.as_deref(), Some("stale_plan"));
+    // Neither file was written: the batch is all-or-nothing.
+    assert_eq!(fs::read_to_string(&repo_a).unwrap(), REPO_A);
+    assert_eq!(fs::read_to_string(&repo_b).unwrap(), REPO_B);
+}
