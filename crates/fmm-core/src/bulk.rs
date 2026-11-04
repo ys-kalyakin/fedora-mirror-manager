@@ -203,6 +203,8 @@ pub fn build_bulk_plan(locations: &RepoLocations, mirror: Mirror) -> Result<Bulk
     let plan = ApplyPlan {
         plan_version: PLAN_VERSION,
         action: PlanAction::Switch,
+        // Filled by the application at apply time from its resolved state.
+        snapshot_root: String::new(),
         snapshot_tag: format!("switch-all-{}", mirror.slug()),
         refresh_cache: false,
         purge: false,

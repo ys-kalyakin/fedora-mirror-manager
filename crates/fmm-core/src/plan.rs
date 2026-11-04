@@ -13,8 +13,10 @@ use crate::classify::Switchability;
 use crate::error::{Error, Result};
 use crate::reposd::{self, RepoLocations, UrlKind, classify_source, inventory};
 
-/// Version of the plan protocol between the app and the helper.
-pub const PLAN_VERSION: u32 = 1;
+/// Version of the plan protocol between the app and the helper. Version 2
+/// adds the plan-carried `snapshot_root`; mismatching app/helper versions are
+/// rejected loudly instead of silently falling back to the legacy path.
+pub const PLAN_VERSION: u32 = 2;
 
 /// A single file rewrite: the full new content plus the expected sha256 of
 /// the current content.
@@ -47,6 +49,11 @@ pub struct ApplyPlan {
     pub plan_version: u32,
     /// What the helper should do.
     pub action: PlanAction,
+    /// User snapshot root the helper snapshots into (absolute path). The
+    /// application fills it from its resolved state; the helper refuses a
+    /// plan without it (`bad_plan`) instead of guessing a directory.
+    #[serde(default)]
+    pub snapshot_root: String,
     /// Tag for the automatic pre-write snapshot, e.g. `switch-updates-yandex`.
     pub snapshot_tag: String,
     /// Run `dnf clean all` + `dnf makecache` after a successful write.
@@ -339,6 +346,8 @@ pub fn build_action_plan(
     let plan = ApplyPlan {
         plan_version: PLAN_VERSION,
         action: PlanAction::Switch,
+        // Filled by the application at apply time from its resolved state.
+        snapshot_root: String::new(),
         snapshot_tag,
         refresh_cache: false,
         purge: false,
@@ -429,6 +438,7 @@ mod tests {
         let plan = ApplyPlan {
             plan_version: PLAN_VERSION,
             action: PlanAction::Switch,
+            snapshot_root: "/home/u/.local/share/fmm/snapshots".to_string(),
             snapshot_tag: "switch-updates-yandex".to_string(),
             refresh_cache: true,
             purge: false,
@@ -441,7 +451,8 @@ mod tests {
         };
         let json = serde_json::to_string(&plan).unwrap();
         let back: ApplyPlan = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.plan_version, 1);
+        assert_eq!(back.plan_version, PLAN_VERSION);
+        assert_eq!(back.snapshot_root, "/home/u/.local/share/fmm/snapshots");
         assert_eq!(back.action, PlanAction::Switch);
         assert_eq!(back.snapshot_tag, "switch-updates-yandex");
         assert!(back.refresh_cache);

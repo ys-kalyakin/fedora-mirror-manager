@@ -50,7 +50,8 @@ Reading `/etc/yum.repos.d` needs no privileges, but switching mirrors and
 restoring snapshots does. The app performs privileged work through the
 `fmm-apply` helper binary invoked with `pkexec` (polkit). Until the helper is
 installed, the app works as a read-only viewer and shows a banner explaining
-what is missing.
+what is missing; an installed helper that is older than the application
+shows the same banner as an update offer.
 
 ### Option A — in-app setup (recommended)
 
@@ -87,6 +88,32 @@ Override the helper path for development and tests:
 FMM_APPLY_HELPER=/path/to/fmm-apply npm run tauri dev
 ```
 
+## Snapshots
+
+Before every privileged write the app snapshots the whole `/etc/yum.repos.d`
+directory into the user snapshot root — `$XDG_DATA_HOME/fmm/snapshots`,
+which defaults to `~/.local/share/fmm/snapshots`. Snapshots live in the
+user's own data directory (never under a system directory) and are owned by
+the user, so listing, restore previews and deletion need no authorization;
+only the writes themselves (switch, restore) go through `pkexec`.
+
+The snapshots panel lists them newest first and offers, per snapshot,
+**Restore** and **Delete** (with a confirmation). The 10 most recent
+snapshots are kept; older ones are pruned automatically.
+
+Snapshots created by earlier versions lived under `/etc/yum.repos.d.bak`.
+When such snapshots are found, the snapshots panel offers a one-click
+migration that moves them into the user snapshot root with a single
+polkit prompt and removes the legacy directory once it is empty.
+
+### Snapshot root override
+
+Override the snapshot root for development and tests:
+
+```sh
+FMM_SNAPSHOT_ROOT=/path/to/snapshots npm run tauri dev
+```
+
 ## Project structure
 
 ```
@@ -102,8 +129,9 @@ openspec/          OpenSpec planning home: specs, changes, archive
 Domain logic lives in `fmm-core` and stays independent of the UI framework;
 `src-tauri` is a thin adapter (commands and state) between the frontend and
 the domain crate. `fmm-apply` receives a computed plan as JSON on stdin,
-snapshots `/etc/yum.repos.d` before every write, verifies the plan against
-the on-disk state, and reports back as JSON on stdout.
+snapshots `/etc/yum.repos.d` into the user snapshot root before every write,
+verifies the plan against the on-disk state, and reports back as JSON on
+stdout.
 
 ## Troubleshooting
 

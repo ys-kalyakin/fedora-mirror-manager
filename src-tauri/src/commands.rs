@@ -13,9 +13,9 @@ use serde::Serialize;
 use fmm_core::error::Error;
 use fmm_core::plan::{ApplyPlan, ApplyReport, PlanOutcome, RepoAction};
 use fmm_core::reposd::{
-    DEFAULT_REPO_DIR, DEFAULT_SNAPSHOT_ROOT, Inventory, RepoLocations, inventory,
+    DEFAULT_REPO_DIR, Inventory, LEGACY_SNAPSHOT_ROOT, RepoLocations, inventory,
 };
-use fmm_core::snapshot::SnapshotInfo;
+use fmm_core::snapshot::{MigrateReport, SnapshotInfo};
 
 /// Status reported by the backend to the shell.
 #[derive(Debug, Serialize)]
@@ -38,16 +38,36 @@ pub fn app_status() -> AppStatus {
 /// detection, so a layout change on disk (e.g. after an OS upgrade) is picked
 /// up by the next inventory or preview without restarting the application.
 pub struct AppState {
-    /// Snapshot root (`/etc/yum.repos.d.bak`).
+    /// User snapshot root (`$XDG_DATA_HOME/fmm/snapshots`), overridable for
+    /// development and tests with `FMM_SNAPSHOT_ROOT`.
     pub snapshot_root: PathBuf,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            snapshot_root: PathBuf::from(DEFAULT_SNAPSHOT_ROOT),
+            snapshot_root: snapshot_root_from_env(),
         }
     }
+}
+
+/// Resolves the snapshot root: `FMM_SNAPSHOT_ROOT`, else the user snapshot
+/// root from the environment.
+fn snapshot_root_from_env() -> PathBuf {
+    match std::env::var("FMM_SNAPSHOT_ROOT") {
+        Ok(v) if !v.is_empty() => PathBuf::from(v),
+        _ => fmm_core::reposd::user_snapshot_root(),
+    }
+}
+
+/// Ensures the snapshot root exists before it is used: the unprivileged
+/// application creates it as the user, so the helper's ownership hand-over
+/// has a user-owned directory to write into.
+pub fn ensure_snapshot_root(state: &AppState) -> Result<(), CmdError> {
+    std::fs::create_dir_all(&state.snapshot_root).map_err(|e| CmdError {
+        code: "io".to_string(),
+        message: format!("cannot create {}: {e}", state.snapshot_root.display()),
+    })
 }
 
 /// Serializable error for the frontend: a machine-readable `code` plus a
@@ -105,6 +125,109 @@ pub fn list_snapshots(state: tauri::State<AppState>) -> Result<Vec<SnapshotInfo>
     Ok(fmm_core::snapshot::list_snapshots(&state.snapshot_root)?)
 }
 
+/// Deletes one snapshot from the user snapshot root. Unprivileged by design:
+/// snapshots live in the user's own data directory.
+#[tauri::command]
+pub fn delete_snapshot(state: tauri::State<AppState>, snapshot_id: String) -> Result<(), CmdError> {
+    Ok(fmm_core::snapshot::delete_snapshot(
+        &state.snapshot_root,
+        &snapshot_id,
+    )?)
+}
+
+/// Snapshots still living in the legacy root, for the migration notice. Empty
+/// when the legacy root is missing or unreadable — the migration itself is
+/// performed by the root helper, which sees the truth.
+#[tauri::command]
+pub fn legacy_snapshots() -> Vec<SnapshotInfo> {
+    legacy_snapshots_with(std::env::var("FMM_LEGACY_SNAPSHOT_ROOT").ok().as_deref())
+}
+
+fn legacy_snapshots_with(env_value: Option<&str>) -> Vec<SnapshotInfo> {
+    let root = match env_value {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => PathBuf::from(LEGACY_SNAPSHOT_ROOT),
+    };
+    fmm_core::snapshot::list_snapshots(&root).unwrap_or_default()
+}
+
+/// Moves the legacy snapshots into the user snapshot root with a single
+/// polkit prompt (`fmm-apply migrate-snapshots`), the same one-prompt pattern
+/// as the helper install.
+#[tauri::command]
+pub fn migrate_legacy_snapshots(state: tauri::State<AppState>) -> Result<MigrateReport, CmdError> {
+    ensure_snapshot_root(&state)?;
+    migrate_legacy_snapshots_with(
+        "pkexec",
+        &helper_path(),
+        &state.snapshot_root,
+        std::env::var("FMM_LEGACY_SNAPSHOT_ROOT")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .as_deref(),
+    )
+}
+
+/// Runs `pkexec <helper> migrate-snapshots` and parses its JSON report. An
+/// empty stdout means the authorization was dismissed; a non-empty but
+/// unparsable stdout is a `bad_report`. A report with `ok: false` (some moves
+/// failed) is returned as-is for the UI to show.
+fn migrate_legacy_snapshots_with(
+    pkexec: &str,
+    helper: &Path,
+    snapshot_root: &Path,
+    legacy_root: Option<&Path>,
+) -> Result<MigrateReport, CmdError> {
+    if !helper.exists() {
+        return Err(CmdError {
+            code: "helper_missing".to_string(),
+            message: format!(
+                "privileged helper {} is not installed — see README (install fmm-apply and the polkit policy)",
+                helper.display()
+            ),
+        });
+    }
+    let mut command = Command::new(pkexec);
+    command.arg(helper).arg("migrate-snapshots");
+    if let Some(legacy) = legacy_root {
+        command.arg("--legacy-root").arg(legacy);
+    }
+    command.arg("--snapshot-root").arg(snapshot_root);
+    let output = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|child| child.wait_with_output())
+        .map_err(|e| CmdError {
+            code: "denied".to_string(),
+            message: format!("cannot run pkexec: {e}"),
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        // pkexec produces no output when the authentication dialog is
+        // dismissed or denied.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = if stderr.trim().is_empty() {
+            "not authorized: the authentication request was dismissed".to_string()
+        } else {
+            format!("not authorized: {}", stderr.trim())
+        };
+        return Err(CmdError {
+            code: "denied".to_string(),
+            message,
+        });
+    }
+    let report: MigrateReport = serde_json::from_str(trimmed).map_err(|e| CmdError {
+        code: "bad_report".to_string(),
+        message: format!("the helper produced an unreadable report: {e}"),
+    })?;
+    Ok(report)
+}
+
 /// Builds the plan (or a no-change outcome) for one repository action,
 /// targeting the file that effectively defines the section.
 #[tauri::command]
@@ -145,15 +268,38 @@ pub fn preview_restore(
 }
 
 /// Applies a switch plan produced by `preview_action`, asking polkit for
-/// authorization. `refresh_cache` controls the post-write `dnf` refresh.
+/// authorization. `refresh_cache` controls the post-write `dnf` refresh. The
+/// plan's snapshot root is filled from the application state before the run.
 #[tauri::command]
-pub fn apply_plan(plan: serde_json::Value, refresh_cache: bool) -> Result<ApplyReport, CmdError> {
+pub fn apply_plan(
+    state: tauri::State<AppState>,
+    plan: serde_json::Value,
+    refresh_cache: bool,
+) -> Result<ApplyReport, CmdError> {
     let mut plan: ApplyPlan = serde_json::from_value(plan).map_err(|e| CmdError {
         code: "bad_plan".to_string(),
         message: e.to_string(),
     })?;
     plan.refresh_cache = refresh_cache;
+    ensure_snapshot_root(&state)?;
+    let plan = prepare_plan(plan, state.snapshot_root.as_path())?;
     run_helper(&plan)
+}
+
+/// Fills the plan's snapshot root from the resolved state (UI plans arrive
+/// without it) and refuses a plan that ends up without one — the helper
+/// rejects such plans loudly, and so does the application.
+fn prepare_plan(mut plan: ApplyPlan, snapshot_root: &Path) -> Result<ApplyPlan, CmdError> {
+    if plan.snapshot_root.is_empty() {
+        plan.snapshot_root = snapshot_root.to_string_lossy().into_owned();
+    }
+    if plan.snapshot_root.is_empty() {
+        return Err(CmdError {
+            code: "bad_plan".to_string(),
+            message: "plan without a snapshot root".to_string(),
+        });
+    }
+    Ok(plan)
 }
 
 /// Restores the repository directory from a snapshot. Restore always targets
@@ -166,6 +312,7 @@ pub fn apply_restore(
     purge: bool,
     refresh_cache: bool,
 ) -> Result<ApplyReport, CmdError> {
+    ensure_snapshot_root(&state)?;
     let mut plan = fmm_core::snapshot::build_restore_plan(
         Path::new(DEFAULT_REPO_DIR),
         &state.snapshot_root,
@@ -173,6 +320,7 @@ pub fn apply_restore(
         purge,
     )?;
     plan.refresh_cache = refresh_cache;
+    let plan = prepare_plan(plan, state.snapshot_root.as_path())?;
     run_helper(&plan)
 }
 
@@ -192,9 +340,16 @@ pub struct HelperStatus {
     pub helper_path: String,
     /// The polkit policy is installed.
     pub policy_installed: bool,
+    /// Plan-protocol version the installed helper reports (`None`: too old
+    /// to answer, or the probe failed).
+    pub plan_version: Option<u32>,
+    /// Installed but older than the application's protocol version: the
+    /// banner offers the one-click update.
+    pub outdated: bool,
 }
 
-/// Reports whether the privileged helper and its policy are installed.
+/// Reports whether the privileged helper and its policy are installed, and
+/// whether the installed helper speaks the current plan protocol.
 #[tauri::command]
 pub fn helper_status() -> HelperStatus {
     helper_status_with(std::env::var("FMM_APPLY_HELPER").ok().as_deref())
@@ -205,11 +360,42 @@ fn helper_status_with(env_value: Option<&str>) -> HelperStatus {
         Some(p) if !p.is_empty() => PathBuf::from(p),
         _ => PathBuf::from(INSTALLED_HELPER),
     };
+    let installed = helper.is_file();
+    let plan_version = if installed {
+        helper_plan_version(&helper)
+    } else {
+        None
+    };
     HelperStatus {
-        installed: helper.is_file(),
+        installed,
         helper_path: helper.to_string_lossy().into_owned(),
         policy_installed: Path::new(POLICY_INSTALLED).exists(),
+        outdated: installed && plan_version != Some(fmm_core::plan::PLAN_VERSION),
+        plan_version,
     }
+}
+
+/// Asks the helper for its plan-protocol version: `fmm-apply version` prints
+/// a bare integer and exits. Executed directly, without polkit — a version
+/// probe grants nothing and touches nothing. A helper too old to know the
+/// flag (or any exec failure) reports `None`; the banner treats that as
+/// outdated. The mode never reads stdin, so the probe cannot hang on it.
+fn helper_plan_version(helper: &Path) -> Option<u32> {
+    let output = Command::new(helper)
+        .arg("version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|child| child.wait_with_output())
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
 /// Result of the in-app setup: what was installed.
@@ -483,6 +669,7 @@ mod tests {
         ApplyPlan {
             plan_version: PLAN_VERSION,
             action: PlanAction::Switch,
+            snapshot_root: String::new(),
             snapshot_tag: "test".to_string(),
             refresh_cache: false,
             purge: false,
@@ -491,9 +678,132 @@ mod tests {
         }
     }
 
-    /// Writes an executable stub script and returns its path.
+    #[test]
+    fn prepare_plan_fills_the_root_from_the_state() {
+        let state = AppState {
+            snapshot_root: PathBuf::from("/home/u/.local/share/fmm/snapshots"),
+        };
+        let plan = prepare_plan(stub_plan(), &state.snapshot_root).unwrap();
+        assert_eq!(plan.snapshot_root, state.snapshot_root.to_string_lossy());
+
+        // A plan that already carries a root keeps it.
+        let mut carried = stub_plan();
+        carried.snapshot_root = "/tmp/other".to_string();
+        assert_eq!(
+            prepare_plan(carried, &state.snapshot_root)
+                .unwrap()
+                .snapshot_root,
+            "/tmp/other"
+        );
+    }
+
+    #[test]
+    fn ensure_snapshot_root_creates_a_user_owned_directory() {
+        let state = AppState {
+            snapshot_root: temp("ensure").join("snaps"),
+        };
+        assert!(!state.snapshot_root.exists());
+        ensure_snapshot_root(&state).unwrap();
+        assert!(state.snapshot_root.is_dir());
+    }
+
+    #[test]
+    fn legacy_snapshots_list_the_override_root_and_tolerate_a_missing_one() {
+        // Missing root: empty, never an error.
+        let dir = temp("legacy-missing");
+        assert!(legacy_snapshots_with(Some(dir.join("nope").to_str().unwrap())).is_empty());
+        // Fake legacy snapshots are listed newest first.
+        let legacy = temp("legacy-list");
+        fs::create_dir_all(legacy.join("20261101T000000Z-switch-fedora-yandex")).unwrap();
+        let listed = legacy_snapshots_with(Some(legacy.to_str().unwrap()));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].tag, "switch-fedora-yandex");
+    }
+
+    #[test]
+    fn migrate_reports_pass_through_the_stub_pkexec() {
+        let dir = temp("migrate-ok");
+        let helper = stub(
+            &dir,
+            "fmm-apply",
+            "cat > /dev/null; echo '{\"ok\":true,\"moved\":[\"20261101T000000Z-x\"],\"failed\":[]}'",
+        );
+        let pkexec = stub(&dir, "pkexec", "exec \"$@\"");
+        let report = migrate_legacy_snapshots_with(
+            pkexec.to_str().unwrap(),
+            &helper,
+            &dir.join("snaps"),
+            None,
+        )
+        .unwrap();
+        assert!(report.ok);
+        assert_eq!(report.moved, vec!["20261101T000000Z-x".to_string()]);
+    }
+
+    #[test]
+    fn migrate_partial_failure_returns_the_report_as_is() {
+        let dir = temp("migrate-fail");
+        let helper = stub(
+            &dir,
+            "fmm-apply",
+            "cat > /dev/null; echo '{\"ok\":false,\"moved\":[],\"failed\":[\"a\"]}'; exit 1",
+        );
+        let pkexec = stub(&dir, "pkexec", "exec \"$@\"");
+        let report = migrate_legacy_snapshots_with(
+            pkexec.to_str().unwrap(),
+            &helper,
+            &dir.join("snaps"),
+            None,
+        )
+        .unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.failed, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn migrate_dismissed_authorization_and_garbage_are_distinct_errors() {
+        let dir = temp("migrate-bad");
+        let helper = stub(&dir, "fmm-apply", "exit 1");
+        let pkexec = stub(&dir, "pkexec", "exec \"$@\"");
+        let err = migrate_legacy_snapshots_with(
+            pkexec.to_str().unwrap(),
+            &helper,
+            &dir.join("snaps"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "denied");
+
+        let helper = stub(&dir, "fmm-apply2", "echo garbage");
+        let err = migrate_legacy_snapshots_with(
+            pkexec.to_str().unwrap(),
+            &helper,
+            &dir.join("snaps"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "bad_report");
+
+        let err = migrate_legacy_snapshots_with(
+            pkexec.to_str().unwrap(),
+            Path::new("/fmm/no/such/helper"),
+            &dir.join("snaps"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "helper_missing");
+    }
+
+    /// Writes an executable stub script and returns its path. The name gets a
+    /// per-call suffix: parallel test threads re-writing and re-executing the
+    /// same stub file race into `ETXTBSY` on spawn.
     fn stub(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static STUB_SEQ: AtomicU32 = AtomicU32::new(0);
+        let path = dir.join(format!(
+            "{name}-{}",
+            STUB_SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         path
@@ -503,6 +813,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fmm-app-test-{}-{tag}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Writes a file under its exact name (no suffix) — for path-resolution
+    /// tests that look a file up by name and never execute it.
+    fn stub_exact(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        path
     }
 
     #[test]
@@ -570,7 +888,7 @@ mod tests {
         // Env wins when the file exists.
         let env_helper = stub(&dir, "env-helper", "exit 0");
         let exe_dir = temp("src-exe");
-        let exe_helper = stub(&exe_dir, "fmm-apply", "exit 0");
+        let exe_helper = stub_exact(&exe_dir, "fmm-apply", "exit 0");
         assert_eq!(
             helper_source_with(Some(env_helper.to_str().unwrap()), Some(&exe_dir)),
             Some(env_helper.clone())
@@ -603,6 +921,32 @@ mod tests {
         assert_eq!(status.helper_path, helper.to_string_lossy());
         // Without the override the status reports the installed location.
         assert_eq!(helper_status_with(None).helper_path, INSTALLED_HELPER);
+    }
+
+    #[test]
+    fn helper_status_flags_a_stale_or_unknown_version() {
+        let dir = temp("status-version");
+        // Current helper: reports the application's plan version.
+        let current = stub(&dir, "current", &format!("echo {PLAN_VERSION}"));
+        let status = helper_status_with(Some(current.to_str().unwrap()));
+        assert!(status.installed);
+        assert_eq!(status.plan_version, Some(PLAN_VERSION));
+        assert!(!status.outdated);
+        // Older helper: a version, but not the current one.
+        let older = stub(&dir, "older", "echo 1");
+        let status = helper_status_with(Some(older.to_str().unwrap()));
+        assert_eq!(status.plan_version, Some(1));
+        assert!(status.outdated);
+        // Too old to know the `version` flag: non-zero exit, unknown version.
+        let ancient = stub(&dir, "ancient", "exit 2");
+        let status = helper_status_with(Some(ancient.to_str().unwrap()));
+        assert_eq!(status.plan_version, None);
+        assert!(status.outdated);
+        // Not installed: nothing is outdated, there is just no helper.
+        let status = helper_status_with(Some("/fmm/no/such/helper"));
+        assert!(!status.installed);
+        assert!(!status.outdated);
+        assert_eq!(status.plan_version, None);
     }
 
     #[test]

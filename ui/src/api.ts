@@ -63,6 +63,8 @@ export interface PlanFile {
 export interface ApplyPlan {
   plan_version: number;
   action: "switch" | "restore";
+  /** User snapshot root; the backend fills it before the helper runs. */
+  snapshot_root?: string;
   snapshot_tag: string;
   refresh_cache: boolean;
   purge?: boolean;
@@ -161,15 +163,29 @@ export interface HelperStatus {
   installed: boolean;
   helper_path: string;
   policy_installed: boolean;
+  /** Plan-protocol version the installed helper reports (null: unknown). */
+  plan_version: number | null;
+  /** Installed but older than the application's protocol version. */
+  outdated: boolean;
 }
 
 export interface InstallReport {
   installed: string[];
 }
 
+/** Result of the one-click legacy-snapshot migration. */
+export interface MigrateReport {
+  ok: boolean;
+  moved: string[];
+  failed: string[];
+}
+
 export const api = {
   listRepos: () => call<Inventory>("list_repos"),
   listSnapshots: () => call<SnapshotInfo[]>("list_snapshots"),
+  deleteSnapshot: (snapshotId: string) => call<void>("delete_snapshot", { snapshotId }),
+  legacySnapshots: () => call<SnapshotInfo[]>("legacy_snapshots"),
+  migrateLegacySnapshots: () => call<MigrateReport>("migrate_legacy_snapshots"),
   previewAction: (repoId: string, action: RepoAction) =>
     call<PlanOutcome>("preview_action", { repoId, action }),
   previewBulkSwitch: (mirror: Mirror) =>

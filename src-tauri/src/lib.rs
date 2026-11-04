@@ -7,12 +7,19 @@ mod commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let state = commands::AppState::default();
+    // Best effort at startup: the user-owned snapshot root must exist before
+    // the helper writes into it. Every privileged command re-ensures on use.
+    let _ = commands::ensure_snapshot_root(&state);
     tauri::Builder::default()
-        .manage(commands::AppState::default())
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::list_repos,
             commands::list_snapshots,
+            commands::delete_snapshot,
+            commands::legacy_snapshots,
+            commands::migrate_legacy_snapshots,
             commands::preview_action,
             commands::preview_bulk_switch,
             commands::preview_restore,

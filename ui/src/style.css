@@ -1,7 +1,100 @@
+/* Theme tokens: the ONLY place allowed to hold raw colors. Light values live
+   on :root; dark values override under [data-theme="dark"]. The theme module
+   (ui/src/theme.ts) keeps the attribute in step with the stored choice or,
+   before any explicit choice, with the live system color scheme. The
+   attribute is always set, so the palette never depends on WebKitGTK's
+   used-scheme resolution (its light-dark() disagrees with matchMedia here). */
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: system-ui, sans-serif;
   --fedora-blue: #3c6eb4;
+
+  --bg-app: #ffffff;
+  --bg-subtle: #f3f4f6;
+  --bg-dialog: #ffffff;
+  --text: #1f2937;
+  --text-muted: #6b7280;
+  --text-url: #4b5563;
+  --text-on-brand: #ffffff;
+  --border: #d1d5db;
+  --border-subtle: #e5e7eb;
+
+  --error: #b91c1c;
+  --warning-text: #92400e;
+  --dialog-warning-text: #92400e;
+  --warning-bg: #fef3c7;
+  --warning-border: #fcd34d;
+
+  --dot-on: #16a34a;
+  --dot-off: #dc2626;
+
+  --badge-yandex-bg: #fef9c3;
+  --badge-yandex-text: #854d0e;
+  --badge-hyperdedic-bg: #e0e7ff;
+  --badge-hyperdedic-text: #3730a3;
+  --badge-metalink-bg: #dbeafe;
+  --badge-metalink-text: #1e40af;
+  --badge-other-bg: #f3f4f6;
+  --badge-other-text: #4b5563;
+  --badge-none-bg: #fee2e2;
+  --badge-none-text: #991b1b;
+  --badge-origin-packaged-bg: #dbeafe;
+  --badge-origin-packaged-text: #1e40af;
+  --badge-origin-local-bg: #f3f4f6;
+  --badge-origin-local-text: #4b5563;
+
+  --btn-bg: #ffffff;
+  --btn-border: #9ca3af;
+  --btn-text: #1f2937;
+  /* Hover accent: fedora blue on a light page, light blue on dark surfaces. */
+  --btn-hover: var(--fedora-blue);
+  /* On the fedora-blue header the regular hover accent vanishes into the
+     background, so the header button gets a dedicated light-blue hover. */
+  --header-btn-hover: #93c5fd;
+
+  --backdrop: rgb(0 0 0 / 0.35);
+  --dialog-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #111827;
+  --bg-subtle: #1f2937;
+  --bg-dialog: #111827;
+  --text: #e5e7eb;
+  --text-muted: #9ca3af;
+  --text-url: #9ca3af;
+
+  --error: #f87171;
+  --warning-text: #fde68a;
+  --dialog-warning-text: #fbbf24;
+  --warning-bg: #78350f;
+  --warning-border: #b45309;
+
+  --dot-on: #4ade80;
+  --dot-off: #f87171;
+
+  --badge-yandex-bg: #713f12;
+  --badge-yandex-text: #fde68a;
+  --badge-hyperdedic-bg: #312e81;
+  --badge-hyperdedic-text: #c7d2fe;
+  --badge-metalink-bg: #1e3a8a;
+  --badge-metalink-text: #bfdbfe;
+  --badge-other-bg: #374151;
+  --badge-other-text: #d1d5db;
+  --badge-none-bg: #7f1d1d;
+  --badge-none-text: #fecaca;
+  --badge-origin-packaged-bg: #1e3a8a;
+  --badge-origin-packaged-text: #bfdbfe;
+  --badge-origin-local-bg: #374151;
+  --badge-origin-local-text: #d1d5db;
+
+  --btn-bg: #1f2937;
+  --btn-border: #4b5563;
+  --btn-text: #e5e7eb;
+  --btn-hover: #93c5fd;
 }
 
 * {
@@ -10,6 +103,8 @@
 
 body {
   margin: 0;
+  background: var(--bg-app);
+  color: var(--text);
 }
 
 #app {
@@ -19,14 +114,37 @@ body {
 }
 
 .app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   background: var(--fedora-blue);
-  color: #fff;
-  padding: 0.75rem 1rem;
+  color: var(--text-on-brand);
+  padding: 0.5rem 1rem;
 }
 
 .app-header__title {
   margin: 0;
   font-size: 1.1rem;
+}
+
+/* Theme toggle rides in the header: the regular .btn hover accent is the
+   fedora blue the header is painted with, so hover falls back to the
+   dedicated light-blue accent. */
+.app-header .btn:hover:not(:disabled) {
+  border-color: var(--header-btn-hover);
+  color: var(--header-btn-hover);
+}
+
+.app-header__theme-toggle {
+  padding: 0.25rem 0.5rem;
+  line-height: 0;
+}
+
+.app-header__theme-toggle svg {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
 }
 
 .app-main {
@@ -43,7 +161,7 @@ body {
 /* --------------------------------------------------------------- panels --- */
 
 .panel {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -54,8 +172,8 @@ body {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
-  background: #f3f4f6;
-  border-bottom: 1px solid #d1d5db;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
 }
 
 .panel__title {
@@ -69,19 +187,19 @@ body {
 
 .panel__loading,
 .panel__empty {
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .panel__error {
-  color: #b91c1c;
+  color: var(--error);
   font-weight: 600;
   margin: 0 0 0.25rem;
 }
 
 .panel__warning {
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 6px;
   padding: 0.4rem 0.6rem;
   margin: 0 0 0.5rem;
@@ -89,7 +207,7 @@ body {
 }
 
 .panel__hint {
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -100,8 +218,8 @@ body {
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 6px;
   padding: 0.55rem 0.8rem;
   margin-bottom: 0.75rem;
@@ -113,7 +231,7 @@ body {
 }
 
 .helper-banner__hint {
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
@@ -159,12 +277,12 @@ body {
 .repo-table td {
   text-align: left;
   padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-subtle);
   vertical-align: top;
 }
 
 .repo-table th {
-  color: #6b7280;
+  color: var(--text-muted);
   font-weight: 600;
   font-size: 0.8rem;
   text-transform: uppercase;
@@ -176,7 +294,7 @@ body {
 }
 
 .repo-table__hint {
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 0.8rem;
 }
 
@@ -185,7 +303,7 @@ body {
   overflow-wrap: anywhere;
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
-  color: #4b5563;
+  color: var(--text-url);
 }
 
 .repo-table__actions {
@@ -222,54 +340,54 @@ body {
 }
 
 .repo-table__dot--on {
-  background: #16a34a;
+  background: var(--dot-on);
 }
 
 .repo-table__dot--off {
-  background: #dc2626;
+  background: var(--dot-off);
 }
 
 .badge--source-yandex {
-  background: #fef9c3;
-  color: #854d0e;
+  background: var(--badge-yandex-bg);
+  color: var(--badge-yandex-text);
 }
 
 .badge--source-hyperdedic {
-  background: #e0e7ff;
-  color: #3730a3;
+  background: var(--badge-hyperdedic-bg);
+  color: var(--badge-hyperdedic-text);
 }
 
 .badge--source-metalink {
-  background: #dbeafe;
-  color: #1e40af;
+  background: var(--badge-metalink-bg);
+  color: var(--badge-metalink-text);
 }
 
 .badge--source-other {
-  background: #f3f4f6;
-  color: #4b5563;
+  background: var(--badge-other-bg);
+  color: var(--badge-other-text);
 }
 
 .badge--source-none {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--badge-none-bg);
+  color: var(--badge-none-text);
 }
 
 .badge--origin-packaged {
-  background: #dbeafe;
-  color: #1e40af;
+  background: var(--badge-origin-packaged-bg);
+  color: var(--badge-origin-packaged-text);
 }
 
 .badge--origin-local {
-  background: #f3f4f6;
-  color: #4b5563;
+  background: var(--badge-origin-local-bg);
+  color: var(--badge-origin-local-text);
 }
 
 /* ------------------------------------------------------------- buttons --- */
 
 .btn {
-  border: 1px solid #9ca3af;
-  background: #fff;
-  color: #1f2937;
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--btn-text);
   border-radius: 6px;
   padding: 0.3rem 0.75rem;
   font-size: 0.85rem;
@@ -277,8 +395,8 @@ body {
 }
 
 .btn:hover:not(:disabled) {
-  border-color: var(--fedora-blue);
-  color: var(--fedora-blue);
+  border-color: var(--btn-hover);
+  color: var(--btn-hover);
 }
 
 .btn:disabled {
@@ -289,12 +407,23 @@ body {
 .btn--primary {
   background: var(--fedora-blue);
   border-color: var(--fedora-blue);
-  color: #fff;
+  color: var(--text-on-brand);
 }
 
 .btn--primary:hover:not(:disabled) {
-  color: #fff;
+  color: var(--text-on-brand);
   filter: brightness(1.1);
+}
+
+.btn--danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.btn--danger:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+  filter: brightness(1.15);
 }
 
 .btn--small {
@@ -316,7 +445,7 @@ body {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.35rem 0;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .snapshot-list__item:last-child {
@@ -335,8 +464,13 @@ body {
 }
 
 .snapshot-list__tag {
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+.snapshot-list__actions {
+  display: flex;
+  gap: 0.4rem;
 }
 
 /* -------------------------------------------------------------- dialogs --- */
@@ -352,17 +486,19 @@ body {
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgb(0 0 0 / 0.35);
+  background: var(--backdrop);
 }
 
 .fmm-dialog {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1.1rem 1.25rem;
   max-width: 34rem;
   max-height: 100%;
   overflow-y: auto;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+  box-shadow: var(--dialog-shadow);
+  background: var(--bg-dialog);
+  color: var(--text);
 }
 
 .dialog__title {
@@ -384,7 +520,7 @@ body {
 .dialog__hint {
   margin: 0 0 0.4rem;
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
@@ -415,7 +551,7 @@ body {
 }
 
 .dialog__file-group {
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border-subtle);
   padding-top: 0.4rem;
 }
 
@@ -452,11 +588,11 @@ body {
 }
 
 .dialog__warning {
-  color: #92400e;
+  color: var(--dialog-warning-text);
 }
 
 .dialog__error {
-  color: #b91c1c;
+  color: var(--error);
   font-weight: 600;
 }
 
@@ -467,145 +603,12 @@ body {
 /* ---------------------------------------------------------- status bar --- */
 
 .app-status {
-  border-top: 1px solid #d1d5db;
+  border-top: 1px solid var(--border);
   padding: 0.5rem 1rem;
   font-size: 0.85rem;
 }
 
 .app-status.status--error {
-  color: #b91c1c;
+  color: var(--error);
   font-weight: 600;
-}
-
-@media (prefers-color-scheme: dark) {
-  .panel {
-    border-color: #374151;
-  }
-
-  .dialog__file-group {
-    border-top-color: #374151;
-  }
-
-  .panel__header {
-    background: #1f2937;
-    border-bottom-color: #374151;
-  }
-
-  .repo-table th,
-  .repo-table td {
-    border-bottom-color: #374151;
-  }
-
-  .repo-table__url,
-  .repo-table__hint,
-  .panel__loading,
-  .panel__empty,
-  .panel__hint,
-  .dialog__hint,
-  .snapshot-list__tag {
-    color: #9ca3af;
-  }
-
-  .repo-table__url {
-    color: #9ca3af;
-  }
-
-  .repo-table__dot--on {
-    background: #4ade80;
-  }
-
-  .repo-table__dot--off {
-    background: #f87171;
-  }
-
-  .badge--source-yandex {
-    background: #713f12;
-    color: #fde68a;
-  }
-
-  .badge--source-hyperdedic {
-    background: #312e81;
-    color: #c7d2fe;
-  }
-
-  .badge--source-metalink {
-    background: #1e3a8a;
-    color: #bfdbfe;
-  }
-
-  .badge--source-other {
-    background: #374151;
-    color: #d1d5db;
-  }
-
-  .badge--source-none {
-    background: #7f1d1d;
-    color: #fecaca;
-  }
-
-  .badge--origin-packaged {
-    background: #1e3a8a;
-    color: #bfdbfe;
-  }
-
-  .badge--origin-local {
-    background: #374151;
-    color: #d1d5db;
-  }
-
-  .btn {
-    background: #1f2937;
-    border-color: #4b5563;
-    color: #e5e7eb;
-  }
-
-  .btn:hover:not(:disabled) {
-    border-color: #93c5fd;
-    color: #93c5fd;
-  }
-
-  .snapshot-list__item {
-    border-bottom-color: #374151;
-  }
-
-  .fmm-dialog {
-    border-color: #374151;
-    background: #111827;
-    color: #e5e7eb;
-  }
-
-  .dialog__warning {
-    color: #fbbf24;
-  }
-
-  .dialog__error {
-    color: #f87171;
-  }
-
-  .panel__warning {
-    background: #78350f;
-    border-color: #b45309;
-    color: #fde68a;
-  }
-
-  .helper-banner {
-    background: #78350f;
-    border-color: #b45309;
-  }
-
-  .helper-banner__hint {
-    color: #9ca3af;
-  }
-
-  .panel__error {
-    color: #f87171;
-  }
-
-  .app-status {
-    border-top-color: #374151;
-  }
-
-  .app-status.status--error {
-    color: #f87171;
-  }
 }

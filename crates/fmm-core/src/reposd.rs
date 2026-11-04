@@ -21,10 +21,41 @@ pub const DEFAULT_REPO_DIR: &str = "/etc/yum.repos.d";
 /// Packaged repository directory on the F45+ layout (Fedora change
 /// "Relocate RPM Repo Configs to /usr").
 pub const PACKAGED_REPO_DIR: &str = "/usr/share/dnf5/repos.d";
-/// Default snapshot root.
-pub const DEFAULT_SNAPSHOT_ROOT: &str = "/etc/yum.repos.d.bak";
+/// Snapshot root subpath under the XDG data home.
+pub const SNAPSHOT_SUBDIR: &str = "fmm/snapshots";
+/// Legacy snapshot root of pre-user-directory versions, kept only for the
+/// one-time migration into [`user_snapshot_root`].
+pub const LEGACY_SNAPSHOT_ROOT: &str = "/etc/yum.repos.d.bak";
 /// Files that are never rewritten (managed by the subscription tooling).
 pub const SKIP_FILES: [&str; 1] = ["redhat.repo"];
+
+/// The user snapshot root: `$XDG_DATA_HOME/fmm/snapshots`, falling back to
+/// `$HOME/.local/share/fmm/snapshots` (the XDG default data location). Never a
+/// system directory: the unprivileged application owns this tree, which is
+/// what lets listing, restore preview and deletion work without polkit.
+pub fn user_snapshot_root() -> PathBuf {
+    user_snapshot_root_in(
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// Resolution behind [`user_snapshot_root`], parameterized for tests.
+pub fn user_snapshot_root_in(xdg_data_home: Option<&str>, home: Option<&str>) -> PathBuf {
+    let data_home = xdg_data_home
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|v| !v.is_empty())
+                .map(|h| PathBuf::from(h).join(".local/share"))
+        })
+        .unwrap_or_else(|| {
+            std::env::home_dir()
+                .unwrap_or_default()
+                .join(".local/share")
+        });
+    data_home.join(SNAPSHOT_SUBDIR)
+}
 
 /// Repository layout of the host, detected from the filesystem (never from
 /// the OS version).
@@ -652,6 +683,23 @@ enabled=0\n";
         assert_eq!(
             classify_source(f.section("u").unwrap().url.as_ref()),
             Source::None
+        );
+    }
+
+    #[test]
+    fn user_snapshot_root_prefers_xdg_data_home_over_home() {
+        assert_eq!(
+            user_snapshot_root_in(Some("/data"), Some("/home/u")),
+            PathBuf::from("/data/fmm/snapshots")
+        );
+        // The XDG default: ~/.local/share when XDG_DATA_HOME is unset or empty.
+        assert_eq!(
+            user_snapshot_root_in(None, Some("/home/u")),
+            PathBuf::from("/home/u/.local/share/fmm/snapshots")
+        );
+        assert_eq!(
+            user_snapshot_root_in(Some(""), Some("/home/u")),
+            PathBuf::from("/home/u/.local/share/fmm/snapshots")
         );
     }
 }

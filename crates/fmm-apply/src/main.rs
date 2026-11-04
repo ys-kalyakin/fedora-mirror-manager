@@ -6,6 +6,12 @@
 //! [`fmm_core::plan::ApplyReport`] as JSON to stdout. Exit code 0 means the
 //! report was produced (`report.ok` says whether the work succeeded); exit 1
 //! means the helper itself failed before/while producing a report.
+//!
+//! `fmm-apply migrate-snapshots` is a second, plan-less mode: a one-shot
+//! migration of the legacy snapshot root into the user snapshot root, covered
+//! by the same single polkit prompt (see [`migrate_main`]). `fmm-apply
+//! version` prints the plan-protocol version for the application's stale
+//! install probe (no polkit, no I/O).
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +19,7 @@ use std::process::Command;
 
 use fmm_core::error::Error;
 use fmm_core::plan::{ApplyPlan, ApplyReport, CacheReport, PlanAction};
-use fmm_core::snapshot;
+use fmm_core::snapshot::{self, MigrateReport};
 use sha2::{Digest, Sha256};
 
 /// Default `dnf` executable (resolved through the helper's PATH).
@@ -22,6 +28,23 @@ const DEFAULT_DNF_BIN: &str = "dnf";
 const OUTPUT_TAIL_CHARS: usize = 2000;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("version") {
+        // Plan-protocol version probe: the application execs the installed
+        // helper directly (no polkit) to detect stale installs. Prints a
+        // bare integer and exits without reading stdin.
+        println!("{}", fmm_core::plan::PLAN_VERSION);
+        return;
+    }
+    if argv.first().map(String::as_str) == Some("migrate-snapshots") {
+        migrate_main(&argv[1..]);
+        return;
+    }
+    plan_main();
+}
+
+/// Plan mode: one plan on stdin, one report on stdout.
+fn plan_main() {
     let args = Args::parse();
     let report = match run(&args) {
         Ok(report) => report,
@@ -40,25 +63,21 @@ fn main() {
     }
 }
 
-/// Parsed command-line arguments.
+/// Parsed command-line arguments of the plan mode. The snapshot root is not
+/// among them: the plan carries it (the application resolves the user root).
 struct Args {
     repo_dir: PathBuf,
-    snapshot_root: PathBuf,
     dnf_bin: String,
 }
 
 impl Args {
     fn parse() -> Self {
         let mut repo_dir = PathBuf::from(fmm_core::reposd::DEFAULT_REPO_DIR);
-        let mut snapshot_root = PathBuf::from(fmm_core::reposd::DEFAULT_SNAPSHOT_ROOT);
         let mut dnf_bin = DEFAULT_DNF_BIN.to_string();
         let mut it = std::env::args().skip(1);
         while let Some(arg) = it.next() {
             match arg.as_str() {
                 "--repo-dir" => repo_dir = it.next().map(PathBuf::from).unwrap_or(repo_dir),
-                "--snapshot-root" => {
-                    snapshot_root = it.next().map(PathBuf::from).unwrap_or(snapshot_root)
-                }
                 "--dnf-bin" => {
                     if let Some(v) = it.next() {
                         dnf_bin = v;
@@ -70,12 +89,90 @@ impl Args {
                 }
             }
         }
+        Self { repo_dir, dnf_bin }
+    }
+}
+
+/// Parsed arguments of the migration mode. `--snapshot-root` is a dev/test
+/// override; both roots default to the app-resolved locations.
+struct MigrateArgs {
+    snapshot_root: PathBuf,
+    legacy_root: PathBuf,
+}
+
+impl MigrateArgs {
+    fn parse(argv: &[String]) -> Self {
+        let mut snapshot_root = fmm_core::reposd::user_snapshot_root();
+        let mut legacy_root = PathBuf::from(fmm_core::reposd::LEGACY_SNAPSHOT_ROOT);
+        let mut it = argv.iter();
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "--snapshot-root" => {
+                    snapshot_root = it.next().map(PathBuf::from).unwrap_or(snapshot_root)
+                }
+                "--legacy-root" => {
+                    legacy_root = it.next().map(PathBuf::from).unwrap_or(legacy_root)
+                }
+                other => {
+                    eprintln!("fmm-apply: unknown argument: {other}");
+                    std::process::exit(2);
+                }
+            }
+        }
         Self {
-            repo_dir,
             snapshot_root,
-            dnf_bin,
+            legacy_root,
         }
     }
+}
+
+/// Migration mode: move the legacy snapshot root into the user snapshot root
+/// under one polkit prompt and print a
+/// [`fmm_core::snapshot::MigrateReport`] as JSON on stdout.
+fn migrate_main(argv: &[String]) {
+    let args = MigrateArgs::parse(argv);
+    let report = match run_migrate(&args) {
+        Ok(report) => report,
+        Err(message) => {
+            eprintln!("fmm-apply: {message}");
+            std::process::exit(1);
+        }
+    };
+    match serde_json::to_string(&report) {
+        Ok(json) => {
+            println!("{json}");
+            std::process::exit(if report.ok { 0 } else { 1 });
+        }
+        Err(err) => {
+            eprintln!("fmm-apply: cannot serialize report: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The migration: create the user root, move the legacy snapshots, hand each
+/// moved snapshot over to the invoking user; `migrate_snapshots` already
+/// removed the legacy root when the moves left it empty.
+fn run_migrate(args: &MigrateArgs) -> Result<MigrateReport, String> {
+    std::fs::create_dir_all(&args.snapshot_root)
+        .map_err(|e| format!("cannot create {}: {e}", args.snapshot_root.display()))?;
+    let mut report = snapshot::migrate_snapshots(&args.legacy_root, &args.snapshot_root);
+    let uid = invoking_uid(
+        std::env::var("PKEXEC_UID").ok().as_deref(),
+        &args.snapshot_root,
+    )?;
+    let moved = std::mem::take(&mut report.moved);
+    for name in moved {
+        match chown_tree(&args.snapshot_root.join(&name), uid) {
+            Ok(()) => report.moved.push(name),
+            Err(message) => {
+                eprintln!("fmm-apply: {message}");
+                report.failed.push(name);
+                report.ok = false;
+            }
+        }
+    }
+    Ok(report)
 }
 
 fn run(args: &Args) -> Result<ApplyReport, Failure> {
@@ -99,6 +196,7 @@ fn run(args: &Args) -> Result<ApplyReport, Failure> {
 }
 
 /// A helper failure reported as `{ok: false, code, message}`.
+#[derive(Debug)]
 struct Failure {
     code: String,
     message: String,
@@ -172,14 +270,20 @@ impl Report {
     }
 }
 
-/// Switch action: snapshot → verify hashes → write → prune → (refresh cache).
+/// Switch action: snapshot → hand it over → verify hashes → write → prune →
+/// (refresh cache).
 fn apply_switch(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> {
-    let snap = snapshot::create_snapshot(&args.repo_dir, &args.snapshot_root, &plan.snapshot_tag)
+    let snap_root = plan_root(plan)?;
+    let snap = snapshot::create_snapshot(&args.repo_dir, &snap_root, &plan.snapshot_tag)
         .map_err(Failure::from)?;
     let mut report = Report {
         snapshot: Some(snap.to_string_lossy().into_owned()),
         ..Default::default()
     };
+    if let Err(failure) = hand_over_snapshot(&snap_root, &snap) {
+        // The snapshot exists: report it alongside the failure.
+        return Ok(report.into_report(Some(failure)));
+    }
 
     // Verify every file first: a mismatch aborts before the first write.
     let mut to_write = Vec::new();
@@ -233,8 +337,8 @@ fn apply_switch(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> {
     Ok(report.into_report(None))
 }
 
-/// Restore action: snapshot the current state → copy the snapshot back →
-/// keep or purge extra files → (refresh cache).
+/// Restore action: snapshot the current state → hand it over → copy the
+/// snapshot back → keep or purge extra files → (refresh cache).
 fn apply_restore(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> {
     let snap_dir = plan
         .snapshot
@@ -248,12 +352,16 @@ fn apply_restore(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> 
         ));
     }
 
-    let snap = snapshot::create_snapshot(&args.repo_dir, &args.snapshot_root, &plan.snapshot_tag)
+    let snap_root = plan_root(plan)?;
+    let snap = snapshot::create_snapshot(&args.repo_dir, &snap_root, &plan.snapshot_tag)
         .map_err(Failure::from)?;
     let mut report = Report {
         snapshot: Some(snap.to_string_lossy().into_owned()),
         ..Default::default()
     };
+    if let Err(failure) = hand_over_snapshot(&snap_root, &snap) {
+        return Ok(report.into_report(Some(failure)));
+    }
 
     snapshot::copy_tree(&snap_dir, &args.repo_dir)?;
     for entry in std::fs::read_dir(&snap_dir)
@@ -286,6 +394,69 @@ fn apply_restore(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> 
         report.cache = Some(refresh_cache(&args.dnf_bin));
     }
     Ok(report.into_report(None))
+}
+
+/// The plan's snapshot root is authoritative: the application resolves the
+/// user snapshot root and fills the field; the helper never guesses a
+/// directory.
+fn plan_root(plan: &ApplyPlan) -> Result<PathBuf, Failure> {
+    if plan.snapshot_root.is_empty() {
+        return Err(Failure::new("bad_plan", "plan without a snapshot root"));
+    }
+    Ok(PathBuf::from(&plan.snapshot_root))
+}
+
+/// Hands the freshly created snapshot over to the invoking user, so the
+/// unprivileged application can list, preview and delete it. A failure is a
+/// snapshot failure: it aborts the privileged write before any file changes.
+fn hand_over_snapshot(snapshot_root: &Path, snap: &Path) -> Result<(), Failure> {
+    let uid = invoking_uid(std::env::var("PKEXEC_UID").ok().as_deref(), snapshot_root)
+        .map_err(|m| Failure::new("snapshot_failed", m))?;
+    chown_tree(snap, uid).map_err(|m| Failure::new("snapshot_failed", m))
+}
+
+/// The uid snapshots are handed to: pkexec sets `PKEXEC_UID` to the invoking
+/// user; without it (manual runs) the snapshot root's owner is used — the
+/// unprivileged application created that root as the user beforehand.
+#[cfg(unix)]
+fn invoking_uid(pkexec_uid: Option<&str>, snapshot_root: &Path) -> Result<u32, String> {
+    use std::os::unix::fs::MetadataExt;
+    if let Some(value) = pkexec_uid.map(str::trim).filter(|v| !v.is_empty()) {
+        return value
+            .parse::<u32>()
+            .map_err(|e| format!("invalid PKEXEC_UID {value:?}: {e}"));
+    }
+    std::fs::metadata(snapshot_root)
+        .map(|meta| meta.uid())
+        .map_err(|e| format!("cannot stat {}: {e}", snapshot_root.display()))
+}
+
+#[cfg(not(unix))]
+fn invoking_uid(_pkexec_uid: Option<&str>, _snapshot_root: &Path) -> Result<u32, String> {
+    Ok(0)
+}
+
+/// Recursively hands `path` over to `uid` (group ownership and file modes
+/// untouched, `std::os::unix::fs::chown` with `None` group).
+#[cfg(unix)]
+fn chown_tree(path: &Path, uid: u32) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+    if meta.is_dir() {
+        let read =
+            std::fs::read_dir(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        for entry in read {
+            let entry = entry.map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            chown_tree(&entry.path(), uid)?;
+        }
+    }
+    std::os::unix::fs::chown(path, Some(uid), None)
+        .map_err(|e| format!("cannot change owner of {}: {e}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn chown_tree(_path: &Path, _uid: u32) -> Result<(), String> {
+    Ok(())
 }
 
 /// Creates the file (mode 0644; ownership follows the running root), making
@@ -385,16 +556,84 @@ mod tests {
     }
 
     #[test]
-    fn args_default_to_system_paths() {
+    fn plan_mode_defaults_to_the_system_repo_dir() {
         // Only exercise the field defaults; parsing real argv is covered by
         // the integration tests.
         let args = Args {
             repo_dir: PathBuf::from(fmm_core::reposd::DEFAULT_REPO_DIR),
-            snapshot_root: PathBuf::from(fmm_core::reposd::DEFAULT_SNAPSHOT_ROOT),
             dnf_bin: DEFAULT_DNF_BIN.to_string(),
         };
         assert_eq!(args.repo_dir, PathBuf::from("/etc/yum.repos.d"));
-        assert_eq!(args.snapshot_root, PathBuf::from("/etc/yum.repos.d.bak"));
         assert_eq!(args.dnf_bin, "dnf");
+    }
+
+    #[test]
+    fn migrate_mode_defaults_to_the_user_and_legacy_roots() {
+        let args = MigrateArgs::parse(&[]);
+        assert_eq!(args.snapshot_root, fmm_core::reposd::user_snapshot_root());
+        assert_eq!(
+            args.legacy_root,
+            PathBuf::from(fmm_core::reposd::LEGACY_SNAPSHOT_ROOT)
+        );
+    }
+
+    #[test]
+    fn migrate_mode_accepts_explicit_roots() {
+        let argv = vec![
+            "--snapshot-root".to_string(),
+            "/tmp/snaps".to_string(),
+            "--legacy-root".to_string(),
+            "/tmp/legacy".to_string(),
+        ];
+        let args = MigrateArgs::parse(&argv);
+        assert_eq!(args.snapshot_root, PathBuf::from("/tmp/snaps"));
+        assert_eq!(args.legacy_root, PathBuf::from("/tmp/legacy"));
+    }
+
+    fn stub_plan() -> ApplyPlan {
+        ApplyPlan {
+            plan_version: fmm_core::plan::PLAN_VERSION,
+            action: PlanAction::Switch,
+            snapshot_root: String::new(),
+            snapshot_tag: "test".to_string(),
+            refresh_cache: false,
+            purge: false,
+            snapshot: None,
+            files: vec![],
+        }
+    }
+
+    #[test]
+    fn plan_without_a_snapshot_root_is_rejected() {
+        let mut plan = stub_plan();
+        assert_eq!(plan_root(&plan).unwrap_err().code, "bad_plan");
+        plan.snapshot_root = "/tmp/snaps".to_string();
+        assert_eq!(plan_root(&plan).unwrap(), PathBuf::from("/tmp/snaps"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn chown_tree_to_the_current_uid_is_a_no_op_success() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("fmm-apply-chown-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested/f.repo"), "[x]\n").unwrap();
+        let uid = std::fs::metadata(&dir).unwrap().uid();
+        assert_eq!(invoking_uid(Some(&uid.to_string()), &dir).unwrap(), uid);
+        chown_tree(&dir, uid).expect("chown tree");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn invoking_uid_falls_back_to_the_snapshot_root_owner() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("fmm-apply-uid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uid = std::fs::metadata(&dir).unwrap().uid();
+        assert_eq!(invoking_uid(None, &dir).unwrap(), uid);
+        assert!(invoking_uid(Some("not-a-number"), &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

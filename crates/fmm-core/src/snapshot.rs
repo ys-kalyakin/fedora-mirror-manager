@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::plan::{ApplyPlan, PLAN_VERSION, PlanAction};
@@ -224,6 +224,102 @@ fn validated_snapshot_dir(snapshot_root: &Path, snapshot_id: &str) -> Result<Pat
     Ok(dir)
 }
 
+/// Deletes the snapshot `snapshot_id` from `snapshot_root`. The id is
+/// validated like the restore path (no separators, no traversal, must exist)
+/// and the removal is contained inside the root, so the unprivileged
+/// application can delete a user-owned snapshot directly.
+pub fn delete_snapshot(snapshot_root: &Path, snapshot_id: &str) -> Result<()> {
+    let dir = validated_snapshot_dir(snapshot_root, snapshot_id)?;
+    if !dir.starts_with(snapshot_root) {
+        return Err(Error::NotFound(format!(
+            "invalid snapshot id: {snapshot_id:?}"
+        )));
+    }
+    fs::remove_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })
+}
+
+/// Report of the legacy-snapshot migration (`fmm-apply migrate-snapshots`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateReport {
+    /// Every legacy snapshot was moved.
+    pub ok: bool,
+    /// Snapshot directories moved into the user root.
+    pub moved: Vec<String>,
+    /// Snapshot directories that could not be moved.
+    pub failed: Vec<String>,
+}
+
+/// Moves every legacy snapshot directory from `legacy_root` into
+/// `snapshot_root`: a plain rename where the filesystems match, copy+remove
+/// across filesystems. Snapshot directories are those whose names start with
+/// `20`, like the listing filter. A destination that already exists is
+/// reported as failed instead of overwritten; the legacy root is removed when
+/// the moves leave it empty. Ownership is left to the privileged caller, which
+/// hands the moved snapshots over to the invoking user.
+pub fn migrate_snapshots(legacy_root: &Path, snapshot_root: &Path) -> MigrateReport {
+    let mut moved = Vec::new();
+    let mut failed = Vec::new();
+    if !legacy_root.is_dir() {
+        return MigrateReport {
+            ok: true,
+            moved,
+            failed,
+        };
+    }
+    let mut names: Vec<String> = match fs::read_dir(legacy_root) {
+        Ok(read) => read
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with("20") && entry.path().is_dir()
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(_) => {
+            return MigrateReport {
+                ok: false,
+                moved,
+                failed: Vec::new(),
+            };
+        }
+    };
+    names.sort();
+    for name in names {
+        let from = legacy_root.join(&name);
+        let to = snapshot_root.join(&name);
+        if to.exists() {
+            failed.push(name);
+            continue;
+        }
+        if move_dir(&from, &to) {
+            moved.push(name);
+        } else {
+            failed.push(name);
+        }
+    }
+    // The legacy root is gone once nothing but an empty directory is left.
+    if fs::read_dir(legacy_root).is_ok_and(|mut read| read.next().is_none()) {
+        let _ = fs::remove_dir(legacy_root);
+    }
+    MigrateReport {
+        ok: failed.is_empty(),
+        moved,
+        failed,
+    }
+}
+
+/// Renames `from` to `to`, falling back to copy + remove across filesystems
+/// (`EXDEV`, e.g. `XDG_DATA_HOME` on another mount).
+fn move_dir(from: &Path, to: &Path) -> bool {
+    if fs::rename(from, to).is_ok() {
+        return true;
+    }
+    if fs::create_dir(to).is_err() {
+        return false;
+    }
+    copy_tree(from, to).is_ok() && fs::remove_dir_all(from).is_ok()
+}
+
 /// `*.repo` files that would be kept (or purged) because they are not part of
 /// the chosen snapshot. Shown in the restore dialog.
 pub fn restore_preview(
@@ -237,7 +333,9 @@ pub fn restore_preview(
 
 /// Builds the restore plan for `snapshot_id`. The helper snapshots the current
 /// state first (tag `before-restore`), copies the snapshot contents back and
-/// optionally purges later files; no file content travels in the plan.
+/// optionally purges later files; no file content travels in the plan. The
+/// plan carries the user snapshot root the helper pre-writes its own snapshot
+/// into, and the restore source is a directory inside that root.
 pub fn build_restore_plan(
     _repo_dir: &Path,
     snapshot_root: &Path,
@@ -248,6 +346,7 @@ pub fn build_restore_plan(
     Ok(ApplyPlan {
         plan_version: PLAN_VERSION,
         action: PlanAction::Restore,
+        snapshot_root: snapshot_root.to_string_lossy().into_owned(),
         snapshot_tag: "before-restore".to_string(),
         refresh_cache: false,
         purge,

@@ -1,4 +1,4 @@
-import type { ApplyReport, BulkFilePreview, BulkPreview, CmdErrorPayload, Mirror, PlanPreview } from "./api";
+import type { ApplyReport, BulkFilePreview, BulkPreview, CmdErrorPayload, HelperStatus, Mirror, PlanPreview } from "./api";
 import { api, notifyApplied } from "./api";
 import { el } from "./dom";
 
@@ -311,6 +311,33 @@ export function showBusy(text: string): { close: () => void } {
   return { close: modal.close };
 }
 
+/** Confirmation for the unprivileged delete of one snapshot. `title` carries
+ * the human-readable snapshot description; Escape or Cancel resolves false. */
+export function confirmDelete(title: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    closeOpenModals();
+    const modal = openModal(() => resolve(false));
+    const finish = (confirmed: boolean) => {
+      modal.close();
+      resolve(confirmed);
+    };
+    const dialog = el("div", "fmm-dialog", "");
+    dialog.append(el("h3", "dialog__title", "Delete snapshot?"));
+    dialog.append(el("p", "dialog__intro", title));
+    dialog.append(
+      el("p", "dialog__row dialog__warning", "The snapshot directory is removed permanently. This cannot be undone."),
+    );
+    const actions = el("div", "dialog__actions", "");
+    const cancel = el("button", "btn", "Cancel");
+    const remove = el("button", "btn btn--danger", "Delete");
+    cancel.addEventListener("click", () => finish(false));
+    remove.addEventListener("click", () => finish(true));
+    actions.append(cancel, remove);
+    dialog.append(actions);
+    modal.root.append(dialog);
+  });
+}
+
 /** Code-aware error text for the known backend failure modes. */
 export function errorMessage(err: CmdErrorPayload): string {
   switch (err.code) {
@@ -388,24 +415,32 @@ export async function runSetupFlow(): Promise<boolean> {
   }
 }
 
-/** Banner shown while the privileged helper is missing (null when installed). */
+/** Banner while the privileged helper is missing or outdated (null when
+ * installed and current). Both variants lead into the same one-click setup. */
 export async function helperBanner(): Promise<HTMLElement | null> {
-  let installed: boolean;
+  let status: HelperStatus;
   try {
-    installed = (await api.helperStatus()).installed;
+    status = await api.helperStatus();
   } catch {
     return null; // status is informational only; never block the panel
   }
-  if (installed) {
+  if (status.installed && !status.outdated) {
     return null;
   }
   const banner = el("div", "helper-banner", "");
   const text = el("div", "helper-banner__text", "");
-  text.append(el("strong", "", "Privileged helper is not installed. "));
-  text.append(
-    el("span", "helper-banner__hint", "Switching mirrors and restoring snapshots need it. Installing asks for authorization once."),
-  );
-  const install = el("button", "btn btn--primary", "Install helper");
+  if (status.outdated) {
+    text.append(el("strong", "", "Privileged helper is outdated. "));
+    text.append(
+      el("span", "helper-banner__hint", "The installed helper speaks an older protocol than this application, so privileged actions fail until it is updated. Updating asks for authorization once."),
+    );
+  } else {
+    text.append(el("strong", "", "Privileged helper is not installed. "));
+    text.append(
+      el("span", "helper-banner__hint", "Switching mirrors and restoring snapshots need it. Installing asks for authorization once."),
+    );
+  }
+  const install = el("button", "btn btn--primary", status.outdated ? "Update helper" : "Install helper");
   install.addEventListener("click", () => void runSetupFlow());
   banner.append(text, install);
   return banner;

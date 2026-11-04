@@ -7,13 +7,28 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use fmm_core::plan::{ApplyPlan, ApplyReport, PlanAction};
-use fmm_core::snapshot;
+use fmm_core::snapshot::{self, MigrateReport};
 
 /// Fresh temp directory.
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fmm-apply-test-{}-{tag}", std::process::id()));
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+/// The uid of the test process (files it creates are owned by it). Chowning
+/// to this uid is a no-op success for a non-root run, which is what the
+/// ownership hand-over boils down to in tests.
+fn current_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    static UID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *UID.get_or_init(|| {
+        let probe = std::env::temp_dir().join(format!("fmm-uid-probe-{}", std::process::id()));
+        fs::write(&probe, b"").unwrap();
+        let uid = fs::metadata(&probe).unwrap().uid();
+        let _ = fs::remove_file(&probe);
+        uid
+    })
 }
 
 /// A stub `dnf` that logs its invocation and exits with a configurable code.
@@ -30,6 +45,8 @@ fn dnf_stub(dir: &Path, exit_code: i32) -> PathBuf {
 }
 
 /// Runs the helper binary with the plan on stdin; returns (report, raw stdout).
+/// The snapshot root travels in the plan (like the app sends it), and
+/// `PKEXEC_UID` points the ownership hand-over at the test's own uid.
 fn run_helper(
     plan: &ApplyPlan,
     repo_dir: &Path,
@@ -37,15 +54,16 @@ fn run_helper(
     dnf_bin: &Path,
     dnf_log: &Path,
 ) -> ApplyReport {
-    let json = serde_json::to_string(plan).unwrap();
+    let mut plan = plan.clone();
+    plan.snapshot_root = snap_root.to_string_lossy().into_owned();
+    let json = serde_json::to_string(&plan).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_fmm-apply"))
         .arg("--repo-dir")
         .arg(repo_dir)
-        .arg("--snapshot-root")
-        .arg(snap_root)
         .arg("--dnf-bin")
         .arg(dnf_bin)
         .env("FMM_DNF_LOG", dnf_log)
+        .env("PKEXEC_UID", current_uid().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -69,6 +87,7 @@ fn switch_plan(path: &Path, content: &str) -> ApplyPlan {
     ApplyPlan {
         plan_version: PLAN_VERSION,
         action: PlanAction::Switch,
+        snapshot_root: String::new(), // run_helper fills it from its snap_root argument
         snapshot_tag: "switch-test".to_string(),
         refresh_cache: false,
         purge: false,
@@ -179,6 +198,7 @@ fn empty_hash_creates_a_missing_file() {
     let plan = ApplyPlan {
         plan_version: fmm_core::plan::PLAN_VERSION,
         action: PlanAction::Switch,
+        snapshot_root: String::new(), // run_helper fills it from its snap_root argument
         snapshot_tag: "switch-test".to_string(),
         refresh_cache: false,
         purge: false,
@@ -223,6 +243,7 @@ fn create_conflicts_with_an_existing_file_are_stale() {
     let plan = ApplyPlan {
         plan_version: fmm_core::plan::PLAN_VERSION,
         action: PlanAction::Switch,
+        snapshot_root: String::new(), // run_helper fills it from its snap_root argument
         snapshot_tag: "switch-test".to_string(),
         refresh_cache: false,
         purge: false,
@@ -257,6 +278,7 @@ fn snapshot_failure_aborts_the_write() {
     let plan = ApplyPlan {
         plan_version: fmm_core::plan::PLAN_VERSION,
         action: PlanAction::Switch,
+        snapshot_root: String::new(), // run_helper fills it from its snap_root argument
         snapshot_tag: "switch-test".to_string(),
         refresh_cache: false,
         purge: false,
@@ -376,6 +398,7 @@ fn restore_plan_without_snapshot_path_is_rejected() {
     let plan = ApplyPlan {
         plan_version: fmm_core::plan::PLAN_VERSION,
         action: PlanAction::Restore,
+        snapshot_root: String::new(), // run_helper fills it from its snap_root argument
         snapshot_tag: "before-restore".to_string(),
         refresh_cache: false,
         purge: false,
@@ -470,4 +493,142 @@ fn one_stale_file_in_a_multi_file_plan_writes_nothing() {
     // Neither file was written: the batch is all-or-nothing.
     assert_eq!(fs::read_to_string(&repo_a).unwrap(), REPO_A);
     assert_eq!(fs::read_to_string(&repo_b).unwrap(), REPO_B);
+}
+
+/// A plan without a snapshot root is rejected (`bad_plan`) — the helper never
+/// guesses a directory, the application resolves the user root and fills the
+/// field. Drives the binary directly: `run_helper` would fill the root.
+#[test]
+fn plan_without_snapshot_root_is_rejected() {
+    let work = temp_dir("no-root");
+    let repo_dir = work.join("repos");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo = repo_dir.join("fedora.repo");
+    fs::write(&repo, REPO_A).unwrap();
+
+    let plan = switch_plan(&repo, "[fedora]\nname=New\n"); // snapshot_root: ""
+    let json = serde_json::to_string(&plan).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fmm-apply"))
+        .arg("--repo-dir")
+        .arg(&repo_dir)
+        .env("PKEXEC_UID", current_uid().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(json.as_bytes())
+                .unwrap();
+            drop(child.stdin.take());
+            child.wait_with_output()
+        })
+        .expect("run helper");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: ApplyReport = serde_json::from_str(stdout.trim()).expect("report JSON");
+    assert!(!report.ok);
+    assert_eq!(report.code.as_deref(), Some("bad_plan"));
+    // Nothing was written.
+    assert_eq!(fs::read_to_string(&repo).unwrap(), REPO_A);
+}
+
+/// The migration mode end to end: one snapshot moves out of a legacy root
+/// that also holds a stray file (so the root survives), and the report is
+/// JSON on stdout with exit code 0.
+#[test]
+fn migrate_mode_moves_snapshots_and_keeps_a_non_empty_legacy_root() {
+    let work = temp_dir("migrate");
+    let legacy = work.join("legacy.bak");
+    let snap_root = work.join("snaps");
+    fs::create_dir_all(legacy.join("20261101T000000Z-switch-fedora-yandex")).unwrap();
+    fs::write(
+        legacy.join("20261101T000000Z-switch-fedora-yandex/fedora.repo"),
+        "[fedora]\n",
+    )
+    .unwrap();
+    fs::write(legacy.join("notes.txt"), "not a snapshot").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fmm-apply"))
+        .arg("migrate-snapshots")
+        .arg("--snapshot-root")
+        .arg(&snap_root)
+        .arg("--legacy-root")
+        .arg(&legacy)
+        .env("PKEXEC_UID", current_uid().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run helper");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: MigrateReport = serde_json::from_str(stdout.trim()).expect("report JSON");
+    assert!(report.ok, "report: {report:?}");
+    assert_eq!(
+        report.moved,
+        vec!["20261101T000000Z-switch-fedora-yandex".to_string()]
+    );
+    assert!(report.failed.is_empty());
+    assert!(
+        snap_root
+            .join("20261101T000000Z-switch-fedora-yandex/fedora.repo")
+            .is_file()
+    );
+    // The stray file kept the legacy root alive.
+    assert!(legacy.join("notes.txt").is_file());
+}
+
+/// A legacy root left empty by the migration is removed entirely.
+#[test]
+fn migrate_mode_removes_a_fully_emptied_legacy_root() {
+    let work = temp_dir("migrate-empty");
+    let legacy = work.join("legacy.bak");
+    let snap_root = work.join("snaps");
+    fs::create_dir_all(legacy.join("20261102T000000Z-before-restore")).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fmm-apply"))
+        .arg("migrate-snapshots")
+        .arg("--snapshot-root")
+        .arg(&snap_root)
+        .arg("--legacy-root")
+        .arg(&legacy)
+        .env("PKEXEC_UID", current_uid().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run helper");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: MigrateReport = serde_json::from_str(stdout.trim()).expect("report JSON");
+    assert!(report.ok, "report: {report:?}");
+    assert_eq!(
+        report.moved,
+        vec!["20261102T000000Z-before-restore".to_string()]
+    );
+    assert!(snap_root.join("20261102T000000Z-before-restore").is_dir());
+    assert!(!legacy.exists());
+}
+
+/// The version probe the application runs against the installed helper: a
+/// bare `PLAN_VERSION` on stdout, exit 0, no polkit, no stdin read.
+#[test]
+fn version_mode_prints_the_plan_protocol_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fmm-apply"))
+        .arg("version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run helper");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        fmm_core::plan::PLAN_VERSION.to_string()
+    );
 }
