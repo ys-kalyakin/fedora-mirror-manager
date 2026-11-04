@@ -13,3 +13,6 @@ dist/
 .idea/
 *.swp
 .DS_Store
+
+# ZCode workspace config (local only)
+.zcode/
