@@ -261,10 +261,10 @@ export function showInfoDialog(title: string, message: string): void {
 
 /**
  * In-app privileged helper setup: installs the helper binary and the polkit
- * policy via two pkexec-authorized steps. Resolves true when installed.
+ * policy under a single pkexec authorization. Resolves true when installed.
  */
 export async function runSetupFlow(): Promise<boolean> {
-  const busy = showBusy("Installing the privileged helper — two authorization prompts may appear…");
+  const busy = showBusy("Installing the privileged helper — one authorization prompt will appear…");
   try {
     const report = await api.installHelper();
     busy.close();
@@ -296,7 +296,7 @@ export async function helperBanner(): Promise<HTMLElement | null> {
   const text = el("div", "helper-banner__text", "");
   text.append(el("strong", "", "Privileged helper is not installed. "));
   text.append(
-    el("span", "helper-banner__hint", "Switching mirrors and restoring snapshots need it. Installing asks for authorization (two prompts)."),
+    el("span", "helper-banner__hint", "Switching mirrors and restoring snapshots need it. Installing asks for authorization once."),
   );
   const install = el("button", "btn btn--primary", "Install helper");
   install.addEventListener("click", () => void runSetupFlow());

@@ -58,19 +58,35 @@ pub fn classify(id: &str, file_name: &str) -> RepoKey {
     }
 
     // Source / debuginfo / playground repositories are left as they are.
-    if t.contains("source") || t.contains("srpm") || t.contains("debuginfo") || t.contains("playground") {
+    if t.contains("source")
+        || t.contains("srpm")
+        || t.contains("debuginfo")
+        || t.contains("playground")
+    {
         return RepoKey::Skip;
     }
 
     if t.contains("rpmfusion") || t.contains("rpm-fusion") {
         let nonfree = t.contains("nonfree");
         if t.contains("testing") {
-            return if nonfree { RepoKey::RfNonfreeTesting } else { RepoKey::RfFreeTesting };
+            return if nonfree {
+                RepoKey::RfNonfreeTesting
+            } else {
+                RepoKey::RfFreeTesting
+            };
         }
         if t.contains("updates") {
-            return if nonfree { RepoKey::RfNonfreeUpdates } else { RepoKey::RfFreeUpdates };
+            return if nonfree {
+                RepoKey::RfNonfreeUpdates
+            } else {
+                RepoKey::RfFreeUpdates
+            };
         }
-        return if nonfree { RepoKey::RfNonfree } else { RepoKey::RfFree };
+        return if nonfree {
+            RepoKey::RfNonfree
+        } else {
+            RepoKey::RfFree
+        };
     }
 
     if t.contains("epel") {
@@ -124,31 +140,61 @@ mod tests {
     #[test]
     fn classifies_fedora_family() {
         assert_eq!(classify("fedora", "fedora.repo"), RepoKey::Fedora);
-        assert_eq!(classify("fedora-modular", "fedora-modular.repo"), RepoKey::FedoraModular);
-        assert_eq!(classify("updates", "fedora-updates.repo"), RepoKey::Updates);
-        assert_eq!(classify("updates-modular", "fedora-updates-modular.repo"), RepoKey::UpdatesModular);
-        assert_eq!(classify("updates-testing", "fedora-updates-testing.repo"), RepoKey::UpdatesTesting);
         assert_eq!(
-            classify("updates-testing-modular", "fedora-updates-testing-modular.repo"),
+            classify("fedora-modular", "fedora-modular.repo"),
+            RepoKey::FedoraModular
+        );
+        assert_eq!(classify("updates", "fedora-updates.repo"), RepoKey::Updates);
+        assert_eq!(
+            classify("updates-modular", "fedora-updates-modular.repo"),
+            RepoKey::UpdatesModular
+        );
+        assert_eq!(
+            classify("updates-testing", "fedora-updates-testing.repo"),
+            RepoKey::UpdatesTesting
+        );
+        assert_eq!(
+            classify(
+                "updates-testing-modular",
+                "fedora-updates-testing-modular.repo"
+            ),
             RepoKey::UpdatesTestingModular
         );
     }
 
     #[test]
     fn classifies_rpmfusion_family() {
-        assert_eq!(classify("rpmfusion-free", "rpmfusion-free.repo"), RepoKey::RfFree);
-        assert_eq!(classify("rpmfusion-free-updates", "rpmfusion-free-updates.repo"), RepoKey::RfFreeUpdates);
         assert_eq!(
-            classify("rpmfusion-free-updates-testing", "rpmfusion-free-updates-testing.repo"),
+            classify("rpmfusion-free", "rpmfusion-free.repo"),
+            RepoKey::RfFree
+        );
+        assert_eq!(
+            classify("rpmfusion-free-updates", "rpmfusion-free-updates.repo"),
+            RepoKey::RfFreeUpdates
+        );
+        assert_eq!(
+            classify(
+                "rpmfusion-free-updates-testing",
+                "rpmfusion-free-updates-testing.repo"
+            ),
             RepoKey::RfFreeTesting
         );
-        assert_eq!(classify("rpmfusion-nonfree", "rpmfusion-nonfree.repo"), RepoKey::RfNonfree);
         assert_eq!(
-            classify("rpmfusion-nonfree-updates", "rpmfusion-nonfree-updates.repo"),
+            classify("rpmfusion-nonfree", "rpmfusion-nonfree.repo"),
+            RepoKey::RfNonfree
+        );
+        assert_eq!(
+            classify(
+                "rpmfusion-nonfree-updates",
+                "rpmfusion-nonfree-updates.repo"
+            ),
             RepoKey::RfNonfreeUpdates
         );
         assert_eq!(
-            classify("rpmfusion-nonfree-updates-testing", "rpmfusion-nonfree-updates-testing.repo"),
+            classify(
+                "rpmfusion-nonfree-updates-testing",
+                "rpmfusion-nonfree-updates-testing.repo"
+            ),
             RepoKey::RfNonfreeTesting
         );
     }
@@ -156,19 +202,40 @@ mod tests {
     #[test]
     fn classifies_epel_family() {
         assert_eq!(classify("epel", "epel.repo"), RepoKey::Epel);
-        assert_eq!(classify("epel-testing", "epel-testing.repo"), RepoKey::EpelTesting);
-        assert_eq!(classify("epel-modular", "epel-modular.repo"), RepoKey::EpelModular);
+        assert_eq!(
+            classify("epel-testing", "epel-testing.repo"),
+            RepoKey::EpelTesting
+        );
+        assert_eq!(
+            classify("epel-modular", "epel-modular.repo"),
+            RepoKey::EpelModular
+        );
     }
 
     #[test]
     fn classifies_cisco_and_skips_specials() {
-        assert_eq!(classify("fedora-cisco-openh264", "fedora-cisco-openh264.repo"), RepoKey::Cisco);
-        assert_eq!(classify("epel-cisco-openh264", "epel-cisco-openh264.repo"), RepoKey::Cisco);
+        assert_eq!(
+            classify("fedora-cisco-openh264", "fedora-cisco-openh264.repo"),
+            RepoKey::Cisco
+        );
+        assert_eq!(
+            classify("epel-cisco-openh264", "epel-cisco-openh264.repo"),
+            RepoKey::Cisco
+        );
         // A COPR id contains a fedora substring but must stay untouched.
-        assert_eq!(classify("user-app", "_copr:copr.fedorainfracloud.org:user-app.repo"), RepoKey::Skip);
+        assert_eq!(
+            classify("user-app", "_copr:copr.fedorainfracloud.org:user-app.repo"),
+            RepoKey::Skip
+        );
         assert_eq!(classify("fedora-source", "fedora.repo"), RepoKey::Skip);
-        assert_eq!(classify("updates-debuginfo", "fedora-updates.repo"), RepoKey::Skip);
-        assert_eq!(classify("google-chrome", "google-chrome.repo"), RepoKey::Skip);
+        assert_eq!(
+            classify("updates-debuginfo", "fedora-updates.repo"),
+            RepoKey::Skip
+        );
+        assert_eq!(
+            classify("google-chrome", "google-chrome.repo"),
+            RepoKey::Skip
+        );
         assert_eq!(classify("rhel-9-baseos", "redhat.repo"), RepoKey::Skip);
         // Dots are normalized to spaces: "example.org" must not read as a key.
         assert_eq!(classify("mirrors.example.org", "third.repo"), RepoKey::Skip);
@@ -177,7 +244,10 @@ mod tests {
     #[test]
     fn switchability_follows_key() {
         assert_eq!(switchability(RepoKey::Fedora), Switchability::Switchable);
-        assert_eq!(switchability(RepoKey::EpelTesting), Switchability::Switchable);
+        assert_eq!(
+            switchability(RepoKey::EpelTesting),
+            Switchability::Switchable
+        );
         assert_eq!(switchability(RepoKey::Cisco), Switchability::Cisco);
         assert_eq!(switchability(RepoKey::Skip), Switchability::NotSwitchable);
     }

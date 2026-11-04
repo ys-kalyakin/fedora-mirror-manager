@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::classify::{classify, switchability, RepoKey, Switchability};
+use crate::classify::{RepoKey, Switchability, classify, switchability};
 use crate::error::{Error, Result};
 
 /// Default repository directory: the only location on the legacy layout, the
@@ -57,12 +57,20 @@ pub struct RepoLocations {
 impl RepoLocations {
     /// Locations of the legacy layout with `dir` as the only repo directory.
     pub fn legacy(dir: impl Into<PathBuf>) -> Self {
-        Self { layout: Layout::Legacy, local_dir: dir.into(), packaged_dir: None }
+        Self {
+            layout: Layout::Legacy,
+            local_dir: dir.into(),
+            packaged_dir: None,
+        }
     }
 
     /// Locations of the F45+ layout.
     pub fn f45_plus(packaged_dir: impl Into<PathBuf>, local_dir: impl Into<PathBuf>) -> Self {
-        Self { layout: Layout::F45Plus, local_dir: local_dir.into(), packaged_dir: Some(packaged_dir.into()) }
+        Self {
+            layout: Layout::F45Plus,
+            local_dir: local_dir.into(),
+            packaged_dir: Some(packaged_dir.into()),
+        }
     }
 
     /// Detects the layout of the running host from the filesystem.
@@ -151,7 +159,10 @@ pub struct RepoFile {
 impl RepoFile {
     /// Reads and parses the `.repo` file at `path`.
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
+        let bytes = fs::read(path).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let text = String::from_utf8(bytes).map_err(|_| Error::Parse {
             file: path.to_path_buf(),
             reason: "file is not valid UTF-8".to_string(),
@@ -163,7 +174,11 @@ impl RepoFile {
     pub fn from_text(path: PathBuf, text: &str) -> Self {
         let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
         let sections = parse_sections(&lines);
-        Self { path, lines, sections }
+        Self {
+            path,
+            lines,
+            sections,
+        }
     }
 
     /// The raw lines of the file (without newline characters).
@@ -190,8 +205,15 @@ impl RepoFile {
     /// directly under the header and/or sets `enabled`. Commented URL lines
     /// are removed as well; every other line is untouched, matching the
     /// reference rewriter.
-    pub fn rewrite_section(&mut self, section_id: &str, baseurl: Option<&str>, set_enabled: Option<&str>) {
-        let Some(sec) = self.section(section_id) else { return };
+    pub fn rewrite_section(
+        &mut self,
+        section_id: &str,
+        baseurl: Option<&str>,
+        set_enabled: Option<&str>,
+    ) {
+        let Some(sec) = self.section(section_id) else {
+            return;
+        };
         let (header_line, end_line) = (sec.header_line, sec.end_line);
         let mut out: Vec<String> = Vec::with_capacity(self.lines.len() + 2);
         for (i, line) in self.lines.iter().enumerate() {
@@ -234,7 +256,10 @@ pub fn is_enabled_line(line: &str) -> bool {
 fn line_matches_any_key(line: &str, keys: &[&str]) -> bool {
     let t = line.trim_start();
     let t = t.strip_prefix('#').unwrap_or(t).trim_start();
-    keys.iter().any(|key| t.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('=')))
+    keys.iter().any(|key| {
+        t.strip_prefix(key)
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    })
 }
 
 /// Section id for a `[id]` header line.
@@ -295,7 +320,9 @@ fn parse_sections(lines: &[String]) -> Vec<Section> {
     }
     // Close the ranges: each section ends where the next header begins.
     for n in 0..sections.len() {
-        let end = sections.get(n + 1).map_or(lines.len(), |next| next.header_line);
+        let end = sections
+            .get(n + 1)
+            .map_or(lines.len(), |next| next.header_line);
         sections[n].end_line = end;
     }
     sections
@@ -390,7 +417,11 @@ pub struct Inventory {
 pub fn inventory(locations: &RepoLocations) -> Result<Inventory> {
     let dirs = locations.read_dirs();
     if dirs.iter().all(|dir| !dir.is_dir()) {
-        let names = dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ");
+        let names = dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(Error::NotFound(format!(
             "repository director{} {}",
             if dirs.len() == 1 { "y" } else { "ies" },
@@ -406,7 +437,11 @@ pub fn inventory(locations: &RepoLocations) -> Result<Inventory> {
     for dir in dirs {
         let mut dir_ids: HashSet<String> = HashSet::new();
         for path in list_repo_files(dir)? {
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
             match RepoFile::load(&path) {
                 Ok(repo_file) => {
                     for section in repo_file.sections() {
@@ -419,7 +454,11 @@ pub fn inventory(locations: &RepoLocations) -> Result<Inventory> {
                             name: name_of(&repo_file, section),
                             file: file_name.clone(),
                             path: path.to_string_lossy().into_owned(),
-                            origin: if locations.is_packaged(dir) { Origin::Packaged } else { Origin::Local },
+                            origin: if locations.is_packaged(dir) {
+                                Origin::Packaged
+                            } else {
+                                Origin::Local
+                            },
                             enabled: is_enabled(section),
                             source: classify_source(section.url.as_ref()),
                             url: section.url.as_ref().map(|(_, v)| v.clone()),
@@ -428,12 +467,19 @@ pub fn inventory(locations: &RepoLocations) -> Result<Inventory> {
                         });
                     }
                 }
-                Err(err) => errors.push(FileError { file: file_name, message: err.to_string() }),
+                Err(err) => errors.push(FileError {
+                    file: file_name,
+                    message: err.to_string(),
+                }),
             }
         }
         claimed.extend(dir_ids);
     }
-    Ok(Inventory { layout: locations.layout, entries, errors })
+    Ok(Inventory {
+        layout: locations.layout,
+        entries,
+        errors,
+    })
 }
 
 /// Sorted `*.repo` file paths in `dir`. A missing directory contributes no
@@ -443,9 +489,15 @@ fn list_repo_files(dir: &Path) -> Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
     let mut files: Vec<PathBuf> = Vec::new();
-    let read = fs::read_dir(dir).map_err(|source| Error::Io { path: dir.to_path_buf(), source })?;
+    let read = fs::read_dir(dir).map_err(|source| Error::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
     for entry in read {
-        let entry = entry.map_err(|source| Error::Io { path: dir.to_path_buf(), source })?;
+        let entry = entry.map_err(|source| Error::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|e| e == "repo") {
             files.push(path);
@@ -460,9 +512,9 @@ fn name_of(repo_file: &RepoFile, section: &crate::reposd::Section) -> String {
         .lines()
         .get(section.header_line + 1..section.end_line)
         .and_then(|lines| {
-            lines.iter().find_map(|line| {
-                key_value(line).and_then(|(k, v)| (k == "name").then_some(v))
-            })
+            lines
+                .iter()
+                .find_map(|line| key_value(line).and_then(|(k, v)| (k == "name").then_some(v)))
         })
         .unwrap_or_else(|| section.id.clone())
 }
@@ -500,7 +552,11 @@ enabled=0\n";
         assert_eq!(fedora.enabled.as_deref(), Some("1"));
         assert_eq!(
             fedora.url.as_ref().unwrap(),
-            &(UrlKind::Metalink, "https://mirrors.fedoraproject.org/metalink?repo=fedora-$releasever&arch=$basearch".to_string())
+            &(
+                UrlKind::Metalink,
+                "https://mirrors.fedoraproject.org/metalink?repo=fedora-$releasever&arch=$basearch"
+                    .to_string()
+            )
         );
         assert_eq!(f.section("updates").unwrap().enabled.as_deref(), Some("0"));
         // Line-preserving round-trip.
@@ -510,23 +566,38 @@ enabled=0\n";
     #[test]
     fn classifies_sources() {
         let f = RepoFile::from_text(PathBuf::from("x.repo"), SAMPLE);
-        assert_eq!(classify_source(f.section("fedora").unwrap().url.as_ref()), Source::Metalink);
+        assert_eq!(
+            classify_source(f.section("fedora").unwrap().url.as_ref()),
+            Source::Metalink
+        );
 
         let yandex = "[u]\nbaseurl=https://mirror.yandex.ru/fedora/linux/updates/$releasever/Everything/$basearch/\n";
         let f = RepoFile::from_text(PathBuf::from("x.repo"), yandex);
-        assert_eq!(classify_source(f.section("u").unwrap().url.as_ref()), Source::Yandex);
+        assert_eq!(
+            classify_source(f.section("u").unwrap().url.as_ref()),
+            Source::Yandex
+        );
 
         let hyper = "[u]\nbaseurl=https://mirror.hyperdedic.ru/fedora/epel/$releasever/Everything/$basearch/\n";
         let f = RepoFile::from_text(PathBuf::from("x.repo"), hyper);
-        assert_eq!(classify_source(f.section("u").unwrap().url.as_ref()), Source::Hyperdedic);
+        assert_eq!(
+            classify_source(f.section("u").unwrap().url.as_ref()),
+            Source::Hyperdedic
+        );
 
         let foreign = "[u]\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\n";
         let f = RepoFile::from_text(PathBuf::from("x.repo"), foreign);
-        assert_eq!(classify_source(f.section("u").unwrap().url.as_ref()), Source::Other);
+        assert_eq!(
+            classify_source(f.section("u").unwrap().url.as_ref()),
+            Source::Other
+        );
 
         let none = "[u]\nname=No URL\n";
         let f = RepoFile::from_text(PathBuf::from("x.repo"), none);
-        assert_eq!(classify_source(f.section("u").unwrap().url.as_ref()), Source::None);
+        assert_eq!(
+            classify_source(f.section("u").unwrap().url.as_ref()),
+            Source::None
+        );
     }
 
     #[test]
@@ -542,7 +613,9 @@ enabled=0\n";
         assert!(!fedora_block.contains("#baseurl="));
         // gpgcheck, gpgkey, enabled and the updates section are untouched.
         assert!(out.contains("gpgcheck=1"));
-        assert!(out.contains("gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch"));
+        assert!(
+            out.contains("gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch")
+        );
         assert!(out.contains("enabled=1\n"));
         assert!(out.contains("[updates]"));
         assert!(out.contains("repo=updates-released-f$releasever"));
@@ -550,7 +623,10 @@ enabled=0\n";
 
     #[test]
     fn rewrite_only_toggles_enabled_when_asked() {
-        let mut f = RepoFile::from_text(PathBuf::from("c.repo"), "[c]\nname=x\nenabled=1\nbaseurl=https://example.org/repo/\n");
+        let mut f = RepoFile::from_text(
+            PathBuf::from("c.repo"),
+            "[c]\nname=x\nenabled=1\nbaseurl=https://example.org/repo/\n",
+        );
         // Cisco disable: enabled=0, URL lines stay.
         f.rewrite_section("c", None, Some("0"));
         let out = f.render();
@@ -573,6 +649,9 @@ enabled=0\n";
     #[test]
     fn empty_value_counts_as_no_source() {
         let f = RepoFile::from_text(PathBuf::from("x.repo"), "[u]\nbaseurl=\nenabled=1\n");
-        assert_eq!(classify_source(f.section("u").unwrap().url.as_ref()), Source::None);
+        assert_eq!(
+            classify_source(f.section("u").unwrap().url.as_ref()),
+            Source::None
+        );
     }
 }

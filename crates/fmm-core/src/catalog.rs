@@ -36,7 +36,8 @@ impl Mirror {
 }
 
 /// `baseurl` of the official OpenH264 codecs mirror (cisco repositories).
-pub const CISCO_CODECS_BASEURL: &str = "https://codecs.fedoraproject.org/openh264/$releasever/$basearch/";
+pub const CISCO_CODECS_BASEURL: &str =
+    "https://codecs.fedoraproject.org/openh264/$releasever/$basearch/";
 
 /// Returns the `baseurl` for `mirror` and `key`, or `None` when the mirror
 /// does not carry that family (HyperDedic mirrors only Fedora and EPEL).
@@ -47,14 +48,30 @@ pub fn baseurl(mirror: Mirror, key: RepoKey) -> Option<String> {
         RepoKey::FedoraModular => format!("{p}/linux/releases/$releasever/Modular/$basearch/os/"),
         RepoKey::Updates => format!("{p}/linux/updates/$releasever/Everything/$basearch/"),
         RepoKey::UpdatesModular => format!("{p}/linux/updates/$releasever/Modular/$basearch/"),
-        RepoKey::UpdatesTesting => format!("{p}/linux/updates/testing/$releasever/Everything/$basearch/"),
-        RepoKey::UpdatesTestingModular => format!("{p}/linux/updates/testing/$releasever/Modular/$basearch/"),
-        RepoKey::RfFree => format!("{p}/rpmfusion/free/fedora/releases/$releasever/Everything/$basearch/os/"),
-        RepoKey::RfFreeUpdates => format!("{p}/rpmfusion/free/fedora/updates/$releasever/$basearch/"),
-        RepoKey::RfFreeTesting => format!("{p}/rpmfusion/free/fedora/updates/testing/$releasever/$basearch/"),
-        RepoKey::RfNonfree => format!("{p}/rpmfusion/nonfree/fedora/releases/$releasever/Everything/$basearch/os/"),
-        RepoKey::RfNonfreeUpdates => format!("{p}/rpmfusion/nonfree/fedora/updates/$releasever/$basearch/"),
-        RepoKey::RfNonfreeTesting => format!("{p}/rpmfusion/nonfree/fedora/updates/testing/$releasever/$basearch/"),
+        RepoKey::UpdatesTesting => {
+            format!("{p}/linux/updates/testing/$releasever/Everything/$basearch/")
+        }
+        RepoKey::UpdatesTestingModular => {
+            format!("{p}/linux/updates/testing/$releasever/Modular/$basearch/")
+        }
+        RepoKey::RfFree => {
+            format!("{p}/rpmfusion/free/fedora/releases/$releasever/Everything/$basearch/os/")
+        }
+        RepoKey::RfFreeUpdates => {
+            format!("{p}/rpmfusion/free/fedora/updates/$releasever/$basearch/")
+        }
+        RepoKey::RfFreeTesting => {
+            format!("{p}/rpmfusion/free/fedora/updates/testing/$releasever/$basearch/")
+        }
+        RepoKey::RfNonfree => {
+            format!("{p}/rpmfusion/nonfree/fedora/releases/$releasever/Everything/$basearch/os/")
+        }
+        RepoKey::RfNonfreeUpdates => {
+            format!("{p}/rpmfusion/nonfree/fedora/updates/$releasever/$basearch/")
+        }
+        RepoKey::RfNonfreeTesting => {
+            format!("{p}/rpmfusion/nonfree/fedora/updates/testing/$releasever/$basearch/")
+        }
         RepoKey::Epel => format!("{p}/epel/$releasever/Everything/$basearch/"),
         RepoKey::EpelTesting => format!("{p}/epel/testing/$releasever/Everything/$basearch/"),
         RepoKey::EpelModular => format!("{p}/epel/$releasever/Modular/$basearch/"),
@@ -88,11 +105,26 @@ mod tests {
     fn yandex_mapping_matches_reference() {
         let y = Mirror::Yandex.root();
         let cases = [
-            (RepoKey::Fedora, format!("{y}/linux/releases/$releasever/Everything/$basearch/os/")),
-            (RepoKey::FedoraModular, format!("{y}/linux/releases/$releasever/Modular/$basearch/os/")),
-            (RepoKey::Updates, format!("{y}/linux/updates/$releasever/Everything/$basearch/")),
-            (RepoKey::UpdatesModular, format!("{y}/linux/updates/$releasever/Modular/$basearch/")),
-            (RepoKey::UpdatesTesting, format!("{y}/linux/updates/testing/$releasever/Everything/$basearch/")),
+            (
+                RepoKey::Fedora,
+                format!("{y}/linux/releases/$releasever/Everything/$basearch/os/"),
+            ),
+            (
+                RepoKey::FedoraModular,
+                format!("{y}/linux/releases/$releasever/Modular/$basearch/os/"),
+            ),
+            (
+                RepoKey::Updates,
+                format!("{y}/linux/updates/$releasever/Everything/$basearch/"),
+            ),
+            (
+                RepoKey::UpdatesModular,
+                format!("{y}/linux/updates/$releasever/Modular/$basearch/"),
+            ),
+            (
+                RepoKey::UpdatesTesting,
+                format!("{y}/linux/updates/testing/$releasever/Everything/$basearch/"),
+            ),
             (
                 RepoKey::UpdatesTestingModular,
                 format!("{y}/linux/updates/testing/$releasever/Modular/$basearch/"),
@@ -101,26 +133,47 @@ mod tests {
                 RepoKey::RfFree,
                 format!("{y}/rpmfusion/free/fedora/releases/$releasever/Everything/$basearch/os/"),
             ),
-            (RepoKey::RfFreeUpdates, format!("{y}/rpmfusion/free/fedora/updates/$releasever/$basearch/")),
+            (
+                RepoKey::RfFreeUpdates,
+                format!("{y}/rpmfusion/free/fedora/updates/$releasever/$basearch/"),
+            ),
             (
                 RepoKey::RfFreeTesting,
                 format!("{y}/rpmfusion/free/fedora/updates/testing/$releasever/$basearch/"),
             ),
             (
                 RepoKey::RfNonfree,
-                format!("{y}/rpmfusion/nonfree/fedora/releases/$releasever/Everything/$basearch/os/"),
+                format!(
+                    "{y}/rpmfusion/nonfree/fedora/releases/$releasever/Everything/$basearch/os/"
+                ),
             ),
-            (RepoKey::RfNonfreeUpdates, format!("{y}/rpmfusion/nonfree/fedora/updates/$releasever/$basearch/")),
+            (
+                RepoKey::RfNonfreeUpdates,
+                format!("{y}/rpmfusion/nonfree/fedora/updates/$releasever/$basearch/"),
+            ),
             (
                 RepoKey::RfNonfreeTesting,
                 format!("{y}/rpmfusion/nonfree/fedora/updates/testing/$releasever/$basearch/"),
             ),
-            (RepoKey::Epel, format!("{y}/epel/$releasever/Everything/$basearch/")),
-            (RepoKey::EpelTesting, format!("{y}/epel/testing/$releasever/Everything/$basearch/")),
-            (RepoKey::EpelModular, format!("{y}/epel/$releasever/Modular/$basearch/")),
+            (
+                RepoKey::Epel,
+                format!("{y}/epel/$releasever/Everything/$basearch/"),
+            ),
+            (
+                RepoKey::EpelTesting,
+                format!("{y}/epel/testing/$releasever/Everything/$basearch/"),
+            ),
+            (
+                RepoKey::EpelModular,
+                format!("{y}/epel/$releasever/Modular/$basearch/"),
+            ),
         ];
         for (key, url) in cases {
-            assert_eq!(baseurl(Mirror::Yandex, key).as_deref(), Some(url.as_str()), "key {key:?}");
+            assert_eq!(
+                baseurl(Mirror::Yandex, key).as_deref(),
+                Some(url.as_str()),
+                "key {key:?}"
+            );
         }
     }
 
@@ -136,7 +189,12 @@ mod tests {
             Some(format!("{h}/epel/$releasever/Everything/$basearch/").as_str())
         );
         // RPM Fusion is not mirrored on HyperDedic.
-        for key in [RepoKey::RfFree, RepoKey::RfFreeUpdates, RepoKey::RfNonfree, RepoKey::RfNonfreeTesting] {
+        for key in [
+            RepoKey::RfFree,
+            RepoKey::RfFreeUpdates,
+            RepoKey::RfNonfree,
+            RepoKey::RfNonfreeTesting,
+        ] {
             assert_eq!(baseurl(Mirror::Hyperdedic, key), None, "key {key:?}");
         }
         // Cisco and skip keys have no mirror URL at all.
@@ -149,6 +207,9 @@ mod tests {
 
     #[test]
     fn cisco_codecs_url_matches_reference() {
-        assert_eq!(CISCO_CODECS_BASEURL, "https://codecs.fedoraproject.org/openh264/$releasever/$basearch/");
+        assert_eq!(
+            CISCO_CODECS_BASEURL,
+            "https://codecs.fedoraproject.org/openh264/$releasever/$basearch/"
+        );
     }
 }

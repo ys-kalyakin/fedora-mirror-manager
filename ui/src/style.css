@@ -129,18 +129,26 @@ body {
   font-size: 0.9rem;
 }
 
-/* Column shares: repository, file, enabled, source, url, action. The URL
-   column (5th) takes the remaining space. */
-.repo-table th:nth-child(1) { width: 18%; }
-.repo-table th:nth-child(2) { width: 18%; }
+/* Column shares: repository, file, state, source, url, action. The URL
+   column (5th) takes the remaining space. State holds only the fixed dot but
+   keeps 7% so its header word fits without painting over Source; Source (11%)
+   is sized for the longest badge label, "HyperDedic". */
+.repo-table th:nth-child(1) { width: 16%; }
+.repo-table th:nth-child(2) { width: 16%; }
 .repo-table th:nth-child(3) { width: 7%; }
-.repo-table th:nth-child(4) { width: 9%; }
+.repo-table th:nth-child(4) { width: 11%; }
 .repo-table th:nth-child(6) { width: 18%; }
 
 /* Long unbreakable content (COPR ids, repo file names) wraps inside its own
-   cell instead of painting over the next column. */
+   cell instead of painting over the next column. Badge labels are the
+   exception: a mid-word break ("HyperDed-ic") reads as corruption, so badges
+   never wrap — the Source column is sized for the longest label instead. */
 .repo-table td {
   overflow-wrap: anywhere;
+}
+
+.repo-table .badge {
+  white-space: nowrap;
 }
 
 .repo-table td:nth-child(2) {
@@ -196,14 +204,22 @@ body {
   font-weight: 600;
 }
 
-.badge--on {
-  background: #dcfce7;
-  color: #166534;
+/* Enabled state dot: a fixed-size schematic circle instead of a text pill, so
+   the Enabled column cannot wrap or shift between rows. Green = enabled,
+   red = disabled (the meaning is also on the element as title/aria-label). */
+.repo-table__dot {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
 }
 
-.badge--off {
-  background: #f3f4f6;
-  color: #6b7280;
+.repo-table__dot--on {
+  background: #16a34a;
+}
+
+.repo-table__dot--off {
+  background: #dc2626;
 }
 
 .badge--source-yandex {
@@ -451,14 +467,12 @@ body {
     color: #9ca3af;
   }
 
-  .badge--on {
-    background: #14532d;
-    color: #bbf7d0;
+  .repo-table__dot--on {
+    background: #4ade80;
   }
 
-  .badge--off {
-    background: #1f2937;
-    color: #9ca3af;
+  .repo-table__dot--off {
+    background: #f87171;
   }
 
   .badge--source-yandex {

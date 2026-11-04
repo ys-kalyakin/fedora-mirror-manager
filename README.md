@@ -56,7 +56,7 @@ what is missing.
 
 Build the workspace and launch the app; the repositories panel shows a
 banner with an **Install helper** button. Clicking it installs both the
-helper and the polkit policy via two polkit authorization prompts — no manual
+helper and the polkit policy with a single polkit authorization prompt — no manual
 `sudo` commands needed. The action is idempotent: click it again after
 rebuilding the helper to reinstall the fresh binary.
 

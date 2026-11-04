@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::plan::{ApplyPlan, PlanAction, PLAN_VERSION};
+use crate::plan::{ApplyPlan, PLAN_VERSION, PlanAction};
 
 /// Number of snapshots kept in the snapshot root (reference default).
 pub const KEEP_SNAPSHOTS: usize = 10;
@@ -110,7 +110,10 @@ pub fn plan_prune(snapshot_root: &Path, keep: usize) -> Result<Vec<String>> {
 /// prunes old snapshots, keeping [`KEEP_SNAPSHOTS`]. Returns the snapshot path.
 pub fn create_snapshot(repo_dir: &Path, snapshot_root: &Path, tag: &str) -> Result<PathBuf> {
     if !repo_dir.is_dir() {
-        return Err(Error::Snapshot(format!("repository directory {} not found", repo_dir.display())));
+        return Err(Error::Snapshot(format!(
+            "repository directory {} not found",
+            repo_dir.display()
+        )));
     }
     fs::create_dir_all(snapshot_root).map_err(|source| Error::Io {
         path: snapshot_root.to_path_buf(),
@@ -125,14 +128,21 @@ pub fn create_snapshot(repo_dir: &Path, snapshot_root: &Path, tag: &str) -> Resu
         n += 1;
         dir = snapshot_root.join(format!("{ts}-{tag}-{n:03}"));
     }
-    fs::create_dir(&dir).map_err(|source| Error::Io { path: dir.clone(), source })?;
+    fs::create_dir(&dir).map_err(|source| Error::Io {
+        path: dir.clone(),
+        source,
+    })?;
 
     copy_tree(repo_dir, &dir)?;
 
     for name in plan_prune(snapshot_root, KEEP_SNAPSHOTS)? {
         let target = snapshot_root.join(name);
         // Guard from the reference: never remove anything outside the root.
-        if target.starts_with(snapshot_root) && !target.file_name().is_some_and(|f| f.to_string_lossy().contains("..")) {
+        if target.starts_with(snapshot_root)
+            && !target
+                .file_name()
+                .is_some_and(|f| f.to_string_lossy().contains(".."))
+        {
             let _ = fs::remove_dir_all(&target);
         }
     }
@@ -142,17 +152,32 @@ pub fn create_snapshot(repo_dir: &Path, snapshot_root: &Path, tag: &str) -> Resu
 /// Copies the contents of `src` into `dst` recursively, preserving permission
 /// bits (`fs::copy` semantics, like the reference `cp -a` for these files).
 pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    let read = fs::read_dir(src).map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
+    let read = fs::read_dir(src).map_err(|source| Error::Io {
+        path: src.to_path_buf(),
+        source,
+    })?;
     for entry in read {
-        let entry = entry.map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
+        let entry = entry.map_err(|source| Error::Io {
+            path: src.to_path_buf(),
+            source,
+        })?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|source| Error::Io { path: from.clone(), source })?;
+        let file_type = entry.file_type().map_err(|source| Error::Io {
+            path: from.clone(),
+            source,
+        })?;
         if file_type.is_dir() {
-            fs::create_dir(&to).map_err(|source| Error::Io { path: to.clone(), source })?;
+            fs::create_dir(&to).map_err(|source| Error::Io {
+                path: to.clone(),
+                source,
+            })?;
             copy_tree(&from, &to)?;
         } else {
-            fs::copy(&from, &to).map_err(|source| Error::Io { path: from.clone(), source })?;
+            fs::copy(&from, &to).map_err(|source| Error::Io {
+                path: from.clone(),
+                source,
+            })?;
         }
     }
     Ok(())
@@ -161,9 +186,15 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
 /// `*.repo` files present in `repo_dir` but absent from `snapshot_dir`.
 pub fn extra_repo_files(repo_dir: &Path, snapshot_dir: &Path) -> Result<Vec<String>> {
     let mut extras = Vec::new();
-    let read = fs::read_dir(repo_dir).map_err(|source| Error::Io { path: repo_dir.to_path_buf(), source })?;
+    let read = fs::read_dir(repo_dir).map_err(|source| Error::Io {
+        path: repo_dir.to_path_buf(),
+        source,
+    })?;
     for entry in read {
-        let entry = entry.map_err(|source| Error::Io { path: repo_dir.to_path_buf(), source })?;
+        let entry = entry.map_err(|source| Error::Io {
+            path: repo_dir.to_path_buf(),
+            source,
+        })?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.ends_with(".repo") && !snapshot_dir.join(&name).exists() {
             extras.push(name);
@@ -175,19 +206,31 @@ pub fn extra_repo_files(repo_dir: &Path, snapshot_dir: &Path) -> Result<Vec<Stri
 
 /// Validates a snapshot id (no separators, no traversal, exists).
 fn validated_snapshot_dir(snapshot_root: &Path, snapshot_id: &str) -> Result<PathBuf> {
-    if snapshot_id.is_empty() || snapshot_id.contains('/') || snapshot_id.contains('\\') || snapshot_id.contains("..") {
-        return Err(Error::NotFound(format!("invalid snapshot id: {snapshot_id:?}")));
+    if snapshot_id.is_empty()
+        || snapshot_id.contains('/')
+        || snapshot_id.contains('\\')
+        || snapshot_id.contains("..")
+    {
+        return Err(Error::NotFound(format!(
+            "invalid snapshot id: {snapshot_id:?}"
+        )));
     }
     let dir = snapshot_root.join(snapshot_id);
     if !dir.is_dir() {
-        return Err(Error::NotFound(format!("snapshot not found: {snapshot_id}")));
+        return Err(Error::NotFound(format!(
+            "snapshot not found: {snapshot_id}"
+        )));
     }
     Ok(dir)
 }
 
 /// `*.repo` files that would be kept (or purged) because they are not part of
 /// the chosen snapshot. Shown in the restore dialog.
-pub fn restore_preview(repo_dir: &Path, snapshot_root: &Path, snapshot_id: &str) -> Result<Vec<String>> {
+pub fn restore_preview(
+    repo_dir: &Path,
+    snapshot_root: &Path,
+    snapshot_id: &str,
+) -> Result<Vec<String>> {
     let dir = validated_snapshot_dir(snapshot_root, snapshot_id)?;
     extra_repo_files(repo_dir, &dir)
 }

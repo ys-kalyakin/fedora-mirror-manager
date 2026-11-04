@@ -71,7 +71,7 @@ export function initRepos(container: HTMLElement): void {
     const table = el("table", "repo-table", "");
     const thead = el("thead", "", "");
     const headRow = el("tr", "", "");
-    for (const label of ["Repository", "File", "Enabled", "Source", "URL", "Action"]) {
+    for (const label of ["Repository", "File", "State", "Source", "URL", "Action"]) {
       headRow.append(el("th", "", label));
     }
     thead.append(headRow);
@@ -103,7 +103,12 @@ export function initRepos(container: HTMLElement): void {
     tr.append(fileCell);
 
     const enabledCell = el("td", "", "");
-    enabledCell.append(el("span", `badge ${entry.enabled ? "badge--on" : "badge--off"}`, entry.enabled ? "enabled" : "disabled"));
+    const state = entry.enabled ? "enabled" : "disabled";
+    const dot = el("span", `repo-table__dot ${entry.enabled ? "repo-table__dot--on" : "repo-table__dot--off"}`, "");
+    dot.setAttribute("role", "img");
+    dot.setAttribute("title", state);
+    dot.setAttribute("aria-label", state);
+    enabledCell.append(dot);
     tr.append(enabledCell);
 
     const sourceCell = el("td", "", "");
@@ -115,16 +120,21 @@ export function initRepos(container: HTMLElement): void {
     urlCell.title = entry.url ?? "";
     tr.append(urlCell);
 
-    const actionCell = el("td", "repo-table__actions", "");
+    // The td itself must stay a plain table cell (it has to stretch to the
+    // row height so its border aligns with the other columns); the flex
+    // wrapper lives on an inner div.
+    const actionCell = el("td", "", "");
+    const actions = el("div", "repo-table__actions", "");
     if (entry.switchability === "switchable") {
-      actionCell.append(mirrorButton(entry, "yandex"));
-      actionCell.append(mirrorButton(entry, "hyperdedic"));
+      actions.append(mirrorButton(entry, "yandex"));
+      actions.append(mirrorButton(entry, "hyperdedic"));
     } else if (entry.switchability === "cisco") {
-      actionCell.append(ciscoButton(entry, "disable"));
-      actionCell.append(ciscoButton(entry, "codecs"));
+      actions.append(ciscoButton(entry, "disable"));
+      actions.append(ciscoButton(entry, "codecs"));
     } else {
-      actionCell.append(el("span", "repo-table__hint", "not switchable"));
+      actions.append(el("span", "repo-table__hint", "not switchable"));
     }
+    actionCell.append(actions);
     tr.append(actionCell);
     return tr;
   }

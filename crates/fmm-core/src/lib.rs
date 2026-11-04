@@ -26,6 +26,9 @@ mod tests {
     fn version_is_non_empty_and_numeric() {
         let v = version();
         assert!(!v.is_empty());
-        assert!(v.split('.').all(|part| part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty()));
+        assert!(
+            v.split('.')
+                .all(|part| part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty())
+        );
     }
 }

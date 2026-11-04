@@ -56,7 +56,9 @@ impl Args {
         while let Some(arg) = it.next() {
             match arg.as_str() {
                 "--repo-dir" => repo_dir = it.next().map(PathBuf::from).unwrap_or(repo_dir),
-                "--snapshot-root" => snapshot_root = it.next().map(PathBuf::from).unwrap_or(snapshot_root),
+                "--snapshot-root" => {
+                    snapshot_root = it.next().map(PathBuf::from).unwrap_or(snapshot_root)
+                }
                 "--dnf-bin" => {
                     if let Some(v) = it.next() {
                         dnf_bin = v;
@@ -68,18 +70,27 @@ impl Args {
                 }
             }
         }
-        Self { repo_dir, snapshot_root, dnf_bin }
+        Self {
+            repo_dir,
+            snapshot_root,
+            dnf_bin,
+        }
     }
 }
 
 fn run(args: &Args) -> Result<ApplyReport, Failure> {
     let mut stdin = std::io::stdin().lock();
     let mut input = String::new();
-    stdin.read_to_string(&mut input).map_err(|e| Failure::new("io", format!("cannot read plan: {e}")))?;
-    let plan: ApplyPlan =
-        serde_json::from_str(&input).map_err(|e| Failure::new("bad_plan", format!("cannot parse plan: {e}")))?;
+    stdin
+        .read_to_string(&mut input)
+        .map_err(|e| Failure::new("io", format!("cannot read plan: {e}")))?;
+    let plan: ApplyPlan = serde_json::from_str(&input)
+        .map_err(|e| Failure::new("bad_plan", format!("cannot parse plan: {e}")))?;
     if plan.plan_version != fmm_core::plan::PLAN_VERSION {
-        return Err(Failure::new("bad_plan", format!("unsupported plan version {}", plan.plan_version)));
+        return Err(Failure::new(
+            "bad_plan",
+            format!("unsupported plan version {}", plan.plan_version),
+        ));
     }
     match plan.action {
         PlanAction::Switch => apply_switch(&plan, args),
@@ -95,7 +106,10 @@ struct Failure {
 
 impl Failure {
     fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), message: message.into() }
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -162,7 +176,10 @@ impl Report {
 fn apply_switch(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> {
     let snap = snapshot::create_snapshot(&args.repo_dir, &args.snapshot_root, &plan.snapshot_tag)
         .map_err(Failure::from)?;
-    let mut report = Report { snapshot: Some(snap.to_string_lossy().into_owned()), ..Default::default() };
+    let mut report = Report {
+        snapshot: Some(snap.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
 
     // Verify every file first: a mismatch aborts before the first write.
     let mut to_write = Vec::new();
@@ -175,7 +192,10 @@ fn apply_switch(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> {
             if path.exists() {
                 return Err(Failure::new(
                     "stale_plan",
-                    format!("{} already exists (the plan was built to create it)", file.path),
+                    format!(
+                        "{} already exists (the plan was built to create it)",
+                        file.path
+                    ),
                 ));
             }
             to_create.push(file);
@@ -222,19 +242,31 @@ fn apply_restore(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> 
         .map(PathBuf::from)
         .ok_or_else(|| Failure::new("bad_plan", "restore plan without a snapshot path"))?;
     if !snap_dir.is_dir() {
-        return Err(Failure::new("io", format!("snapshot {} not found", snap_dir.display())));
+        return Err(Failure::new(
+            "io",
+            format!("snapshot {} not found", snap_dir.display()),
+        ));
     }
 
     let snap = snapshot::create_snapshot(&args.repo_dir, &args.snapshot_root, &plan.snapshot_tag)
         .map_err(Failure::from)?;
-    let mut report = Report { snapshot: Some(snap.to_string_lossy().into_owned()), ..Default::default() };
+    let mut report = Report {
+        snapshot: Some(snap.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
 
     snapshot::copy_tree(&snap_dir, &args.repo_dir)?;
     for entry in std::fs::read_dir(&snap_dir)
         .map_err(|e| Failure::new("io", format!("cannot read {}: {e}", snap_dir.display())))?
     {
-        let entry = entry.map_err(|e| Failure::new("io", format!("cannot read {}: {e}", snap_dir.display())))?;
-        report.changed.push(args.repo_dir.join(entry.file_name()).to_string_lossy().into_owned());
+        let entry = entry
+            .map_err(|e| Failure::new("io", format!("cannot read {}: {e}", snap_dir.display())))?;
+        report.changed.push(
+            args.repo_dir
+                .join(entry.file_name())
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
 
     // Files that appeared after the snapshot: keep and report, or purge.
@@ -242,7 +274,9 @@ fn apply_restore(plan: &ApplyPlan, args: &Args) -> Result<ApplyReport, Failure> 
         if plan.purge {
             std::fs::remove_file(args.repo_dir.join(&name))
                 .map_err(|e| Failure::new("io", format!("cannot purge {}: {e}", name)))?;
-            report.changed.push(args.repo_dir.join(&name).to_string_lossy().into_owned());
+            report
+                .changed
+                .push(args.repo_dir.join(&name).to_string_lossy().into_owned());
         } else {
             report.extra_files.push(name);
         }
@@ -322,7 +356,11 @@ fn refresh_cache(dnf_bin: &str) -> CacheReport {
         }
     }
     let tail_start = output.len().saturating_sub(OUTPUT_TAIL_CHARS);
-    CacheReport { ran: true, ok, output_tail: output[tail_start..].to_string() }
+    CacheReport {
+        ran: true,
+        ok,
+        output_tail: output[tail_start..].to_string(),
+    }
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -350,7 +388,11 @@ mod tests {
     fn args_default_to_system_paths() {
         // Only exercise the field defaults; parsing real argv is covered by
         // the integration tests.
-        let args = Args { repo_dir: PathBuf::from(fmm_core::reposd::DEFAULT_REPO_DIR), snapshot_root: PathBuf::from(fmm_core::reposd::DEFAULT_SNAPSHOT_ROOT), dnf_bin: DEFAULT_DNF_BIN.to_string() };
+        let args = Args {
+            repo_dir: PathBuf::from(fmm_core::reposd::DEFAULT_REPO_DIR),
+            snapshot_root: PathBuf::from(fmm_core::reposd::DEFAULT_SNAPSHOT_ROOT),
+            dnf_bin: DEFAULT_DNF_BIN.to_string(),
+        };
         assert_eq!(args.repo_dir, PathBuf::from("/etc/yum.repos.d"));
         assert_eq!(args.snapshot_root, PathBuf::from("/etc/yum.repos.d.bak"));
         assert_eq!(args.dnf_bin, "dnf");

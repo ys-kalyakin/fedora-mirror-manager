@@ -3,7 +3,9 @@
 
 mod common;
 
-use fmm_core::snapshot::{create_snapshot, extra_repo_files, list_snapshots, plan_prune, restore_preview};
+use fmm_core::snapshot::{
+    create_snapshot, extra_repo_files, list_snapshots, plan_prune, restore_preview,
+};
 use std::fs;
 use std::path::Path;
 
@@ -12,7 +14,8 @@ fn snapshot_captures_the_directory_and_is_listed_newest_first() {
     let repo_dir = common::fixture_repo_dir();
     let snap_root = common::empty_dir();
 
-    let snap = create_snapshot(&repo_dir, &snap_root, "before-switch-updates-yandex").expect("snapshot");
+    let snap =
+        create_snapshot(&repo_dir, &snap_root, "before-switch-updates-yandex").expect("snapshot");
     // Contents copied with names intact.
     assert!(snap.join("fedora.repo").is_file());
     assert!(snap.join("google-chrome.repo").is_file());
@@ -67,7 +70,11 @@ fn extra_repo_files_are_detected_for_the_restore_dialog() {
     let repo_dir = common::fixture_repo_dir();
     let snap_root = common::empty_dir();
     let snap = create_snapshot(&repo_dir, &snap_root, "clean").expect("snapshot");
-    assert!(extra_repo_files(&repo_dir, &snap).expect("extras").is_empty());
+    assert!(
+        extra_repo_files(&repo_dir, &snap)
+            .expect("extras")
+            .is_empty()
+    );
 
     fs::write(repo_dir.join("added-later.repo"), "[added]\nname=x\n").unwrap();
     let extras = extra_repo_files(&repo_dir, &snap).expect("extras");
@@ -75,7 +82,10 @@ fn extra_repo_files_are_detected_for_the_restore_dialog() {
 
     // Restore preview goes through validation and reports the same.
     let id = snap.file_name().unwrap().to_string_lossy().into_owned();
-    assert_eq!(restore_preview(&repo_dir, &snap_root, &id).expect("preview"), extras);
+    assert_eq!(
+        restore_preview(&repo_dir, &snap_root, &id).expect("preview"),
+        extras
+    );
 }
 
 #[test]
@@ -84,5 +94,9 @@ fn non_repo_files_are_ignored_in_extras() {
     let snap_root = common::empty_dir();
     let snap = create_snapshot(&repo_dir, &snap_root, "x").expect("snapshot");
     fs::write(repo_dir.join("README.txt"), "not a repo file").unwrap();
-    assert!(extra_repo_files(&repo_dir, &snap).expect("extras").is_empty());
+    assert!(
+        extra_repo_files(&repo_dir, &snap)
+            .expect("extras")
+            .is_empty()
+    );
 }

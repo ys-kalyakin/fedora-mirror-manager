@@ -11,8 +11,8 @@
 //! switch targets the overriding copy in `/etc/yum.repos.d` with the
 //! create-new sentinel. Nothing is written.
 
-use fmm_core::plan::{build_action_plan, PlanOutcome, RepoAction};
-use fmm_core::reposd::{detect_layout, inventory, Layout, Origin, RepoLocations};
+use fmm_core::plan::{PlanOutcome, RepoAction, build_action_plan};
+use fmm_core::reposd::{Layout, Origin, RepoLocations, detect_layout, inventory};
 
 #[test]
 #[ignore = "host-dependent: run manually on the target system"]
@@ -28,34 +28,50 @@ fn host_inventory_and_preview_follow_the_real_layout() {
         inv.layout
     );
     for entry in &inv.entries {
-        println!("  {:28} {:9} {:?}", entry.id, format!("{:?},", entry.origin), entry.url);
+        println!(
+            "  {:28} {:9} {:?}",
+            entry.id,
+            format!("{:?},", entry.origin),
+            entry.url
+        );
     }
     assert!(!inv.entries.is_empty(), "the host must have repositories");
 
     match locations.layout {
         Layout::F45Plus => {
             // Packaged Fedora repos must be present and marked as packaged.
-            let fedora = inv.entries.iter().find(|e| e.id == "fedora").expect("packaged fedora repo");
+            let fedora = inv
+                .entries
+                .iter()
+                .find(|e| e.id == "fedora")
+                .expect("packaged fedora repo");
             assert_eq!(fedora.origin, Origin::Packaged);
             assert!(fedora.path.starts_with("/usr/share/dnf5/repos.d/"));
             // Third-party (COPR etc.) entries come from /etc/yum.repos.d.
-            assert!(
-                inv.entries.iter().all(|e| if e.origin == Origin::Local {
-                    e.path.starts_with("/etc/yum.repos.d/")
-                } else {
-                    true
-                })
-            );
+            assert!(inv.entries.iter().all(|e| if e.origin == Origin::Local {
+                e.path.starts_with("/etc/yum.repos.d/")
+            } else {
+                true
+            }));
             // A previewed switch must name the /etc shadow path with the
             // create-new sentinel (no write happens during preview). The host
             // may already point at the requested mirror (hand-edited packaged
             // files), so pick the mirror that actually changes something.
-            let updates = inv.entries.iter().find(|e| e.id == "updates").expect("updates repo");
+            let updates = inv
+                .entries
+                .iter()
+                .find(|e| e.id == "updates")
+                .expect("updates repo");
             let requested = match updates.source {
                 fmm_core::reposd::Source::Yandex => fmm_core::catalog::Mirror::Hyperdedic,
                 _ => fmm_core::catalog::Mirror::Yandex,
             };
-            let outcome = build_action_plan(&locations, "updates", &RepoAction::Switch { mirror: requested }).expect("preview");
+            let outcome = build_action_plan(
+                &locations,
+                "updates",
+                &RepoAction::Switch { mirror: requested },
+            )
+            .expect("preview");
             let PlanOutcome::Plan { preview, plan } = outcome else {
                 // NoChange is only correct if the entry really is on the
                 // requested mirror already.
@@ -84,14 +100,22 @@ fn host_inventory_and_preview_follow_the_real_layout() {
                 std::path::PathBuf::from(&plan.files[0].path),
                 &plan.files[0].content,
             );
-            let section = rewritten.section("updates").expect("updates section in planned content");
+            let section = rewritten
+                .section("updates")
+                .expect("updates section in planned content");
             match &section.url {
                 Some((fmm_core::reposd::UrlKind::BaseUrl, url)) => {
-                    assert!(url.contains("mirror.yandex.ru") || url.contains("mirror.hyperdedic.ru"), "url: {url}");
+                    assert!(
+                        url.contains("mirror.yandex.ru") || url.contains("mirror.hyperdedic.ru"),
+                        "url: {url}"
+                    );
                 }
                 other => panic!("expected a baseurl in the planned section, got {other:?}"),
             }
-            assert!(!std::path::Path::new(&plan.files[0].path).exists(), "preview must not write");
+            assert!(
+                !std::path::Path::new(&plan.files[0].path).exists(),
+                "preview must not write"
+            );
         }
         Layout::Legacy => {
             assert!(inv.entries.iter().all(|e| e.origin == Origin::Local));

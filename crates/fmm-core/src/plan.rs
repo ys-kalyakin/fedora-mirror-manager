@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::catalog::{self, Mirror};
 use crate::classify::Switchability;
 use crate::error::{Error, Result};
-use crate::reposd::{self, classify_source, inventory, RepoLocations, UrlKind};
+use crate::reposd::{self, RepoLocations, UrlKind, classify_source, inventory};
 
 /// Version of the plan protocol between the app and the helper.
 pub const PLAN_VERSION: u32 = 1;
@@ -155,7 +155,10 @@ pub enum PlanOutcome {
     /// Nothing to do: the requested state is already in place.
     NoChange { reason: String },
     /// A plan is ready: preview for the user, files for the helper.
-    Plan { preview: PlanPreview, plan: ApplyPlan },
+    Plan {
+        preview: PlanPreview,
+        plan: ApplyPlan,
+    },
 }
 
 /// Builds the plan for one repository action. Returns [`PlanOutcome::NoChange`]
@@ -168,7 +171,11 @@ pub enum PlanOutcome {
 /// copy in the local directory instead — created when absent (empty
 /// `before_sha256` sentinel), rebuilt from the current packaged file when it
 /// already exists.
-pub fn build_action_plan(locations: &RepoLocations, repo_id: &str, action: &RepoAction) -> Result<PlanOutcome> {
+pub fn build_action_plan(
+    locations: &RepoLocations,
+    repo_id: &str,
+    action: &RepoAction,
+) -> Result<PlanOutcome> {
     let inv = inventory(locations)?;
     let matches: Vec<&reposd::RepoEntry> = inv.entries.iter().filter(|e| e.id == repo_id).collect();
     match matches.len() {
@@ -178,21 +185,27 @@ pub fn build_action_plan(locations: &RepoLocations, repo_id: &str, action: &Repo
             return Err(Error::Parse {
                 file: locations.local_dir.join(repo_id),
                 reason: "repository id is defined in more than one file".to_string(),
-            })
+            });
         }
     }
     let entry = matches[0];
     // Cisco repositories take only their dedicated modes; switchable
     // repositories take only mirror switches; everything else is rejected.
     match (entry.switchability, action) {
-        (Switchability::Cisco, RepoAction::Cisco { .. }) | (Switchability::Switchable, RepoAction::Switch { .. }) => {}
+        (Switchability::Cisco, RepoAction::Cisco { .. })
+        | (Switchability::Switchable, RepoAction::Switch { .. }) => {}
         (Switchability::Cisco, RepoAction::Switch { .. }) => {
             return Err(Error::NotSwitchable {
                 id: repo_id.to_string(),
                 reason: "cisco repositories only support disable/codecs modes".to_string(),
-            })
+            });
         }
-        _ => return Err(Error::NotSwitchable { id: repo_id.to_string(), reason: "repository is not switchable".to_string() }),
+        _ => {
+            return Err(Error::NotSwitchable {
+                id: repo_id.to_string(),
+                reason: "repository is not switchable".to_string(),
+            });
+        }
     }
 
     let (baseurl, set_enabled, snapshot_tag) = match action {
@@ -203,78 +216,116 @@ pub fn build_action_plan(locations: &RepoLocations, repo_id: &str, action: &Repo
                     reason: format!("{} does not carry this repository family", mirror.label()),
                 });
             };
-            (Some(url), None, format!("switch-{}-{}", repo_id, mirror_label(*mirror)))
+            (
+                Some(url),
+                None,
+                format!("switch-{}-{}", repo_id, mirror_label(*mirror)),
+            )
         }
         RepoAction::Cisco { mode } => match mode {
-            CiscoMode::Disable => (None, Some("0".to_string()), format!("cisco-disable-{repo_id}")),
+            CiscoMode::Disable => (
+                None,
+                Some("0".to_string()),
+                format!("cisco-disable-{repo_id}"),
+            ),
             CiscoMode::Codecs => (
                 Some(catalog::CISCO_CODECS_BASEURL.to_string()),
                 Some("1".to_string()),
                 format!("cisco-codecs-{repo_id}"),
             ),
             CiscoMode::Keep => {
-                return Ok(PlanOutcome::NoChange { reason: "the 'keep' mode changes nothing".to_string() })
+                return Ok(PlanOutcome::NoChange {
+                    reason: "the 'keep' mode changes nothing".to_string(),
+                });
             }
         },
     };
 
     let owner = Path::new(&entry.path);
-    let (dest_path, before_sha256, new_content, removed_lines, creates_file, source_path) =
-        if owner.starts_with(&locations.local_dir) {
-            // The owning file is in the local directory: rewrite it in place.
-            let before_content = fs_content(owner)?;
-            // F45+: when the local file shadows a packaged file of the same name,
-            // rebuild the content from the current packaged file so unrelated
-            // package updates are not lost; otherwise rewrite its own content.
-            let packaged_sibling = locations
-                .packaged_dir
-                .as_ref()
-                .map(|packaged| packaged.join(&entry.file))
-                .filter(|candidate| candidate.as_path() != owner && candidate.is_file());
-            let (source, rebuilt, packaged_source) = match packaged_sibling {
-                Some(packaged_path) => match reposd::RepoFile::load(&packaged_path) {
-                    Ok(repo_file) => {
-                        let source_path = packaged_path.to_string_lossy().into_owned();
-                        (repo_file, true, Some(source_path))
-                    }
-                    // The packaged source vanished or is unreadable: fall back to
-                    // the shadow's own content (rewrite in place).
-                    Err(_) => (reposd::RepoFile::load(owner)?, false, None),
-                },
-                None => (reposd::RepoFile::load(owner)?, false, None),
-            };
-            let (removed_lines, new_content) = rewrite(&source, repo_id, baseurl.as_deref(), set_enabled.as_deref())?;
-            if new_content == before_content {
-                return Ok(PlanOutcome::NoChange { reason: no_change_reason(action) });
-            }
-            // A rebuilt shadow whose section already carries the requested mirror
-            // is a no-op even when the packaged source drifted: re-picking the
-            // current mirror must not write anything.
-            if rebuilt
-                && matches!(action, RepoAction::Switch { .. })
-                && classify_source(baseurl.as_ref().map(|url| (UrlKind::BaseUrl, url.clone())).as_ref()) == entry.source
-            {
-                return Ok(PlanOutcome::NoChange { reason: no_change_reason(action) });
-            }
-            (owner.to_path_buf(), sha256_hex(before_content.as_bytes()), new_content, removed_lines, false, packaged_source)
-        } else {
-            // The owning file is packaged: write the overriding copy into the
-            // local directory (never the packaged location).
-            let dest = locations.local_dir.join(&entry.file);
-            if dest.exists() {
-                return Err(Error::NotSwitchable {
+    let (dest_path, before_sha256, new_content, removed_lines, creates_file, source_path) = if owner
+        .starts_with(&locations.local_dir)
+    {
+        // The owning file is in the local directory: rewrite it in place.
+        let before_content = fs_content(owner)?;
+        // F45+: when the local file shadows a packaged file of the same name,
+        // rebuild the content from the current packaged file so unrelated
+        // package updates are not lost; otherwise rewrite its own content.
+        let packaged_sibling = locations
+            .packaged_dir
+            .as_ref()
+            .map(|packaged| packaged.join(&entry.file))
+            .filter(|candidate| candidate.as_path() != owner && candidate.is_file());
+        let (source, rebuilt, packaged_source) = match packaged_sibling {
+            Some(packaged_path) => match reposd::RepoFile::load(&packaged_path) {
+                Ok(repo_file) => {
+                    let source_path = packaged_path.to_string_lossy().into_owned();
+                    (repo_file, true, Some(source_path))
+                }
+                // The packaged source vanished or is unreadable: fall back to
+                // the shadow's own content (rewrite in place).
+                Err(_) => (reposd::RepoFile::load(owner)?, false, None),
+            },
+            None => (reposd::RepoFile::load(owner)?, false, None),
+        };
+        let (removed_lines, new_content) =
+            rewrite(&source, repo_id, baseurl.as_deref(), set_enabled.as_deref())?;
+        if new_content == before_content {
+            return Ok(PlanOutcome::NoChange {
+                reason: no_change_reason(action),
+            });
+        }
+        // A rebuilt shadow whose section already carries the requested mirror
+        // is a no-op even when the packaged source drifted: re-picking the
+        // current mirror must not write anything.
+        if rebuilt
+            && matches!(action, RepoAction::Switch { .. })
+            && classify_source(
+                baseurl
+                    .as_ref()
+                    .map(|url| (UrlKind::BaseUrl, url.clone()))
+                    .as_ref(),
+            ) == entry.source
+        {
+            return Ok(PlanOutcome::NoChange {
+                reason: no_change_reason(action),
+            });
+        }
+        (
+            owner.to_path_buf(),
+            sha256_hex(before_content.as_bytes()),
+            new_content,
+            removed_lines,
+            false,
+            packaged_source,
+        )
+    } else {
+        // The owning file is packaged: write the overriding copy into the
+        // local directory (never the packaged location).
+        let dest = locations.local_dir.join(&entry.file);
+        if dest.exists() {
+            return Err(Error::NotSwitchable {
                     id: repo_id.to_string(),
                     reason: "an overriding file with this name already exists in the local repository directory but does not define this repository".to_string(),
                 });
-            }
-            let source = reposd::RepoFile::load(owner)?;
-            let (removed_lines, new_content) = rewrite(&source, repo_id, baseurl.as_deref(), set_enabled.as_deref())?;
-            if new_content == source.render() {
-                return Ok(PlanOutcome::NoChange { reason: no_change_reason(action) });
-            }
-            let source_path = owner.to_string_lossy().into_owned();
-            (dest, String::new(), new_content, removed_lines, true, Some(source_path))
-        };
+        }
+        let source = reposd::RepoFile::load(owner)?;
+        let (removed_lines, new_content) =
+            rewrite(&source, repo_id, baseurl.as_deref(), set_enabled.as_deref())?;
+        if new_content == source.render() {
+            return Ok(PlanOutcome::NoChange {
+                reason: no_change_reason(action),
+            });
+        }
+        let source_path = owner.to_string_lossy().into_owned();
+        (
+            dest,
+            String::new(),
+            new_content,
+            removed_lines,
+            true,
+            Some(source_path),
+        )
+    };
 
     let preview = PlanPreview {
         file: entry.file.clone(),
@@ -310,12 +361,17 @@ fn rewrite(
     set_enabled: Option<&str>,
 ) -> Result<(Vec<String>, String)> {
     let (header_line, end_line) = {
-        let sec = source.section(repo_id).ok_or_else(|| Error::NotFound(format!("repository id {repo_id}")))?;
+        let sec = source
+            .section(repo_id)
+            .ok_or_else(|| Error::NotFound(format!("repository id {repo_id}")))?;
         (sec.header_line, sec.end_line)
     };
     let removed_lines: Vec<String> = source.lines()[header_line..end_line]
         .iter()
-        .filter(|line| (baseurl.is_some() && reposd::is_url_line(line)) || (set_enabled.is_some() && reposd::is_enabled_line(line)))
+        .filter(|line| {
+            (baseurl.is_some() && reposd::is_url_line(line))
+                || (set_enabled.is_some() && reposd::is_enabled_line(line))
+        })
         .cloned()
         .collect();
     let mut file = source.clone();
@@ -324,9 +380,14 @@ fn rewrite(
 }
 
 fn fs_content(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
-    String::from_utf8(bytes)
-        .map_err(|_| Error::Parse { file: path.to_path_buf(), reason: "file is not valid UTF-8".to_string() })
+    let bytes = std::fs::read(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    String::from_utf8(bytes).map_err(|_| Error::Parse {
+        file: path.to_path_buf(),
+        reason: "file is not valid UTF-8".to_string(),
+    })
 }
 
 fn no_change_reason(action: &RepoAction) -> String {
@@ -401,7 +462,10 @@ mod tests {
         let preview = PlanPreview {
             file: "fedora.repo".to_string(),
             target_path: "/etc/yum.repos.d/fedora.repo".to_string(),
-            new_baseurl: Some("https://mirror.yandex.ru/fedora/linux/$releasever/Everything/$basearch/".to_string()),
+            new_baseurl: Some(
+                "https://mirror.yandex.ru/fedora/linux/$releasever/Everything/$basearch/"
+                    .to_string(),
+            ),
             set_enabled: None,
             removed_lines: vec!["metalink=https://example".to_string()],
             creates_file: true,
@@ -413,14 +477,23 @@ mod tests {
         let back: PlanPreview = serde_json::from_str(&json).unwrap();
         assert_eq!(back.file, "fedora.repo");
         assert!(back.creates_file);
-        assert_eq!(back.source_path.as_deref(), Some("/usr/share/dnf5/repos.d/fedora.repo"));
+        assert_eq!(
+            back.source_path.as_deref(),
+            Some("/usr/share/dnf5/repos.d/fedora.repo")
+        );
     }
 
     #[test]
     fn action_serialization_is_tagged() {
-        let json = serde_json::to_string(&RepoAction::Switch { mirror: Mirror::Yandex }).unwrap();
+        let json = serde_json::to_string(&RepoAction::Switch {
+            mirror: Mirror::Yandex,
+        })
+        .unwrap();
         assert_eq!(json, r#"{"type":"switch","mirror":"yandex"}"#);
-        let json = serde_json::to_string(&RepoAction::Cisco { mode: CiscoMode::Codecs }).unwrap();
+        let json = serde_json::to_string(&RepoAction::Cisco {
+            mode: CiscoMode::Codecs,
+        })
+        .unwrap();
         assert_eq!(json, r#"{"type":"cisco","mode":"codecs"}"#);
     }
 }

@@ -4,7 +4,7 @@ mod common;
 
 use fmm_core::classify::Switchability;
 use fmm_core::error::Error;
-use fmm_core::reposd::{detect_layout_in, inventory, Layout, Origin, RepoLocations, Source};
+use fmm_core::reposd::{Layout, Origin, RepoLocations, Source, detect_layout_in, inventory};
 use std::fs;
 
 #[test]
@@ -12,7 +12,12 @@ fn inventories_the_fixture_directory() {
     let dir = common::fixture_repo_dir();
     let inv = inventory(&RepoLocations::legacy(&dir)).expect("inventory");
 
-    let by_id = |id: &str| inv.entries.iter().find(|e| e.id == id).unwrap_or_else(|| panic!("missing {id}"));
+    let by_id = |id: &str| {
+        inv.entries
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"))
+    };
 
     let updates = by_id("updates");
     assert_eq!(updates.file, "fedora-updates.repo");
@@ -23,11 +28,20 @@ fn inventories_the_fixture_directory() {
     assert_eq!(updates.switchability, Switchability::Switchable);
     // Legacy: every entry is local, and the path points into the directory.
     assert_eq!(updates.origin, Origin::Local);
-    assert_eq!(updates.path, dir.join("fedora-updates.repo").to_string_lossy());
+    assert_eq!(
+        updates.path,
+        dir.join("fedora-updates.repo").to_string_lossy()
+    );
 
     let fedora = by_id("fedora");
     assert_eq!(fedora.source, Source::Metalink);
-    assert!(fedora.url.as_deref().unwrap().starts_with("https://mirrors.fedoraproject.org/metalink"));
+    assert!(
+        fedora
+            .url
+            .as_deref()
+            .unwrap()
+            .starts_with("https://mirrors.fedoraproject.org/metalink")
+    );
 
     let yandex = by_id("fedora-yandex-example");
     assert_eq!(yandex.source, Source::Yandex);
@@ -35,15 +49,24 @@ fn inventories_the_fixture_directory() {
     let chrome = by_id("google-chrome");
     assert_eq!(chrome.source, Source::Other);
     assert_eq!(chrome.switchability, Switchability::NotSwitchable);
-    assert_eq!(chrome.url.as_deref(), Some("https://dl.google.com/linux/chrome/rpm/stable/x86_64"));
+    assert_eq!(
+        chrome.url.as_deref(),
+        Some("https://dl.google.com/linux/chrome/rpm/stable/x86_64")
+    );
 
     let cisco = by_id("fedora-cisco-openh264");
     assert_eq!(cisco.switchability, Switchability::Cisco);
 
     // Source/debuginfo sections are display-only.
-    assert_eq!(by_id("fedora-debuginfo").switchability, Switchability::NotSwitchable);
+    assert_eq!(
+        by_id("fedora-debuginfo").switchability,
+        Switchability::NotSwitchable
+    );
     // Subscription-managed file stays display-only.
-    assert_eq!(by_id("rhel-9-for-x86_64-baseos-rpms").switchability, Switchability::NotSwitchable);
+    assert_eq!(
+        by_id("rhel-9-for-x86_64-baseos-rpms").switchability,
+        Switchability::NotSwitchable
+    );
 
     // 11 fixture sections in total.
     assert_eq!(inv.entries.len(), 11);
@@ -61,7 +84,10 @@ fn empty_directory_is_a_valid_empty_inventory() {
 
 #[test]
 fn missing_directory_is_an_error() {
-    let err = inventory(&RepoLocations::legacy(std::env::temp_dir().join("fmm-core-no-such-dir-xyz"))).unwrap_err();
+    let err = inventory(&RepoLocations::legacy(
+        std::env::temp_dir().join("fmm-core-no-such-dir-xyz"),
+    ))
+    .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)));
     assert!(err.to_string().contains("repository directory"));
 }
@@ -83,7 +109,10 @@ fn unreadable_file_is_reported_alongside_parsed_entries() {
 fn layout_detection_follows_the_packaged_directory() {
     // Missing or empty packaged dir → legacy; one .repo file → F45+.
     assert_eq!(detect_layout_in(&common::empty_dir()), Layout::Legacy);
-    assert_eq!(detect_layout_in(&std::env::temp_dir().join("fmm-core-no-such-packaged-dir")), Layout::Legacy);
+    assert_eq!(
+        detect_layout_in(&std::env::temp_dir().join("fmm-core-no-such-packaged-dir")),
+        Layout::Legacy
+    );
     let (packaged, _local) = common::fixture_f45_dirs();
     assert_eq!(detect_layout_in(&packaged), Layout::F45Plus);
 }
@@ -92,17 +121,32 @@ fn layout_detection_follows_the_packaged_directory() {
 fn f45_inventory_merges_both_locations() {
     let (packaged, local) = common::fixture_f45_dirs();
     // A third-party file only exists locally.
-    fs::write(local.join("third-party.repo"), "[acme]\nname=Acme\nbaseurl=https://acme.example/repo\nenabled=1\n").unwrap();
+    fs::write(
+        local.join("third-party.repo"),
+        "[acme]\nname=Acme\nbaseurl=https://acme.example/repo\nenabled=1\n",
+    )
+    .unwrap();
 
     let locations = RepoLocations::f45_plus(&packaged, &local);
     let inv = inventory(&locations).expect("inventory");
     assert_eq!(inv.layout, Layout::F45Plus);
 
-    let updates = inv.entries.iter().find(|e| e.id == "updates").expect("packaged entry");
+    let updates = inv
+        .entries
+        .iter()
+        .find(|e| e.id == "updates")
+        .expect("packaged entry");
     assert_eq!(updates.origin, Origin::Packaged);
-    assert_eq!(updates.path, packaged.join("fedora-updates.repo").to_string_lossy());
+    assert_eq!(
+        updates.path,
+        packaged.join("fedora-updates.repo").to_string_lossy()
+    );
 
-    let acme = inv.entries.iter().find(|e| e.id == "acme").expect("local entry");
+    let acme = inv
+        .entries
+        .iter()
+        .find(|e| e.id == "acme")
+        .expect("local entry");
     assert_eq!(acme.origin, Origin::Local);
     assert_eq!(acme.switchability, Switchability::NotSwitchable);
 }
@@ -119,19 +163,28 @@ fn f45_local_definition_overrides_the_packaged_section() {
 
     let inv = inventory(&RepoLocations::f45_plus(&packaged, &local)).expect("inventory");
     let updates: Vec<_> = inv.entries.iter().filter(|e| e.id == "updates").collect();
-    assert_eq!(updates.len(), 1, "the packaged duplicate must not be listed separately");
+    assert_eq!(
+        updates.len(),
+        1,
+        "the packaged duplicate must not be listed separately"
+    );
     assert_eq!(updates[0].origin, Origin::Local);
     assert_eq!(updates[0].file, "my-fork.repo");
     assert_eq!(updates[0].source, Source::Yandex);
     // The packaged sections of other files are untouched.
-    assert!(inv.entries.iter().any(|e| e.id == "fedora" && e.origin == Origin::Packaged));
+    assert!(
+        inv.entries
+            .iter()
+            .any(|e| e.id == "fedora" && e.origin == Origin::Packaged)
+    );
 }
 
 #[test]
 fn f45_missing_local_dir_still_reads_the_packaged_one() {
     let (packaged, local) = common::fixture_f45_dirs();
     fs::remove_dir(&local).unwrap();
-    let inv = inventory(&RepoLocations::f45_plus(&packaged, &local)).expect("packaged entries survive");
+    let inv =
+        inventory(&RepoLocations::f45_plus(&packaged, &local)).expect("packaged entries survive");
     assert!(!inv.entries.is_empty());
     assert!(inv.entries.iter().all(|e| e.origin == Origin::Packaged));
 }
@@ -144,5 +197,8 @@ fn f45_missing_all_directories_is_an_error() {
     assert!(matches!(err, Error::NotFound(_)));
     // Both locations are named in the error.
     let message = err.to_string();
-    assert!(message.contains("packaged") && message.contains("local"), "message: {message}");
+    assert!(
+        message.contains("packaged") && message.contains("local"),
+        "message: {message}"
+    );
 }
