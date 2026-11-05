@@ -426,7 +426,9 @@ pub struct InstallReport {
 /// Installs the helper binary and the polkit policy from the app itself:
 /// one `pkexec /bin/sh -c` invocation running root-owned `/usr/bin/install`
 /// per file, covered by a single authorization prompt. Idempotent — safe to
-/// run again after a rebuild.
+/// run again after a rebuild. Both sources are staged into a root-readable
+/// temp directory first, because the resolved helper may sit on the AppImage
+/// bundle mount, which the privileged process cannot read.
 #[tauri::command]
 pub fn install_helper() -> Result<InstallReport, CmdError> {
     install_helper_with("pkexec")
@@ -444,17 +446,38 @@ fn install_with(pkexec: &str, helper_src: Option<&Path>) -> Result<InstallReport
         code: "helper_missing".to_string(),
         message: "helper binary not found — build it first: cargo build -p fmm-apply".to_string(),
     })?;
-    let policy_src = write_policy_temp()?;
-    let (script, installed) = install_script(helper_src, &policy_src);
+    // Staging happens before the authorization: it grants nothing, and the
+    // privileged process must read root-readable copies of both files.
+    let staging = Staging::create()?;
+    let result = install_staged(pkexec, helper_src, &staging);
+    // The staging directory is removed whichever way the install went.
+    staging.remove();
+    result
+}
+
+/// Stages both sources and runs the single privileged install.
+fn install_staged(
+    pkexec: &str,
+    helper_src: &Path,
+    staging: &Staging,
+) -> Result<InstallReport, CmdError> {
+    let policy_src = staging.stage_policy()?;
+    // The installed path is already root-owned: no staging copy, and the
+    // script skips the binary step (the reinstall check inside
+    // `install_script`). Anything else is staged for the privileged read.
+    let helper_for_script = if helper_src == Path::new(INSTALLED_HELPER) {
+        helper_src.to_path_buf()
+    } else {
+        staging.stage_helper(helper_src)?
+    };
+    let (script, installed) = install_script(&helper_for_script, &policy_src);
     let args = [
         OsString::from("/bin/sh"),
         OsString::from("-c"),
         OsString::from(script),
     ];
-    let result = run_pkexec(pkexec, &args);
-    // The staged policy is removed whichever way the install went.
-    let _ = std::fs::remove_file(&policy_src);
-    result.map(|()| InstallReport { installed })
+    run_pkexec(pkexec, &args)?;
+    Ok(InstallReport { installed })
 }
 
 /// Resolves the helper binary to install: `FMM_APPLY_HELPER`, then next to
@@ -485,44 +508,79 @@ fn helper_source_with(env_value: Option<&str>, exe_dir: Option<&Path>) -> Option
     installed.is_file().then_some(installed)
 }
 
-/// Writes the embedded policy to a fresh temp file (mode 0644) for `install`.
-fn write_policy_temp() -> Result<PathBuf, CmdError> {
-    let dir = std::env::temp_dir();
-    for n in 0..1000u32 {
-        let path = dir.join(format!("fmm-policy-{}-{n}.policy", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            // Name taken (parallel run): try the next suffix.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(CmdError {
-                    code: "io".to_string(),
-                    message: format!("cannot stage the polkit policy: {e}"),
-                });
-            }
-            Ok(mut file) => {
-                file.write_all(POLICY_TEXT.as_bytes())
-                    .map_err(|e| CmdError {
-                        code: "io".to_string(),
-                        message: format!("cannot stage the polkit policy: {e}"),
-                    })?;
-                #[cfg(unix)]
-                file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644))
-                    .map_err(|e| CmdError {
-                        code: "io".to_string(),
-                        message: format!("cannot stage the polkit policy: {e}"),
-                    })?;
-                return Ok(path);
+/// Per-run staging area: a fresh temp directory holding root-readable
+/// copies of the files the privileged install reads. The resolved helper
+/// source may sit on the AppImage bundle mount — owner-only FUSE, unreadable
+/// even by root — so the privileged script reads staged copies, never the
+/// bundle location.
+struct Staging {
+    dir: PathBuf,
+}
+
+impl Staging {
+    /// Creates a unique `fmm-install-<pid>-<n>` directory (create-new loop,
+    /// so parallel runs never share one).
+    fn create() -> Result<Self, CmdError> {
+        let base = std::env::temp_dir();
+        for n in 0..1000u32 {
+            let dir = base.join(format!("fmm-install-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                // Name taken (parallel run): try the next suffix.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(stage_err("the install files", &e)),
+                Ok(()) => return Ok(Self { dir }),
             }
         }
+        Err(CmdError {
+            code: "io".to_string(),
+            message: "cannot stage the install files: no free temp name".to_string(),
+        })
     }
-    Err(CmdError {
+
+    fn policy_path(&self) -> PathBuf {
+        self.dir.join("org.fmm.desktop.apply.policy")
+    }
+
+    fn helper_path(&self) -> PathBuf {
+        self.dir.join("fmm-apply")
+    }
+
+    /// Writes the embedded policy into the staging area (mode 0644).
+    fn stage_policy(&self) -> Result<PathBuf, CmdError> {
+        let path = self.policy_path();
+        let mut file =
+            std::fs::File::create(&path).map_err(|e| stage_err("the polkit policy", &e))?;
+        file.write_all(POLICY_TEXT.as_bytes())
+            .map_err(|e| stage_err("the polkit policy", &e))?;
+        #[cfg(unix)]
+        file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .map_err(|e| stage_err("the polkit policy", &e))?;
+        Ok(path)
+    }
+
+    /// Copies the helper binary into the staging area. Mode 0644: the copy
+    /// is only read by the privileged install, never executed.
+    fn stage_helper(&self, source: &Path) -> Result<PathBuf, CmdError> {
+        let path = self.helper_path();
+        std::fs::copy(source, &path).map_err(|e| stage_err("the helper binary", &e))?;
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .map_err(|e| stage_err("the helper binary", &e))?;
+        Ok(path)
+    }
+
+    /// Removes the whole staging directory; called on every exit path.
+    fn remove(&self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Staging failure: an `io` error surfaced before any authorization prompt.
+fn stage_err(what: &str, e: &std::io::Error) -> CmdError {
+    CmdError {
         code: "io".to_string(),
-        message: "cannot stage the polkit policy: no free temp name".to_string(),
-    })
+        message: format!("cannot stage {what}: {e}"),
+    }
 }
 
 /// Shell single-quotes a path for the `sh -c` install script: every
@@ -564,8 +622,13 @@ fn install_command(flags: &[&str], source: &Path, dest: &Path) -> String {
     parts.join(" ")
 }
 
-/// Runs `pkexec <args…>`; a non-zero exit or spawn failure is reported as
-/// `denied` (authorization dismissed or the privileged step failed).
+/// Runs `pkexec <args…>`. Exit code 127 means polkit never granted the
+/// authorization (dismissed or denied) — reported as `denied`. Any other
+/// non-zero exit means the privileged step ran and failed — reported as
+/// `install_failed`, carrying the captured stderr. A spawn failure is
+/// reported as `denied`. The program and arguments come from app-resolved
+/// values only (never user input), and the `sh -c` script is built by
+/// `install_script`, which shell-quotes every interpolated path.
 fn run_pkexec(pkexec: &str, args: &[OsString]) -> Result<(), CmdError> {
     let output = Command::new(pkexec)
         .args(args)
@@ -580,14 +643,27 @@ fn run_pkexec(pkexec: &str, args: &[OsString]) -> Result<(), CmdError> {
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = if stderr.trim().is_empty() {
-            "the authorization request was dismissed".to_string()
-        } else {
-            stderr.trim().to_string()
-        };
+        let detail = stderr.trim();
+        // pkexec exits 127 when the authorization was not obtained; other
+        // codes mean the privileged step itself ran and failed.
+        if output.status.code() == Some(127) {
+            let message = if detail.is_empty() {
+                "the authorization request was dismissed".to_string()
+            } else {
+                detail.to_string()
+            };
+            return Err(CmdError {
+                code: "denied".to_string(),
+                message,
+            });
+        }
         return Err(CmdError {
-            code: "denied".to_string(),
-            message: detail,
+            code: "install_failed".to_string(),
+            message: if detail.is_empty() {
+                "the privileged install step failed".to_string()
+            } else {
+                detail.to_string()
+            },
         });
     }
     Ok(())
@@ -1016,9 +1092,10 @@ mod tests {
         assert!(script.contains("'/tmp/my dir/it'\\''s/fmm-apply'"));
     }
 
-    /// Policy files currently staged by this test process (`fmm-policy-<pid>-*`).
-    fn staged_policy_count() -> usize {
-        let prefix = format!("fmm-policy-{}-", std::process::id());
+    /// Staging directories currently created by this test process
+    /// (`fmm-install-<pid>-*`).
+    fn staging_dir_count() -> usize {
+        let prefix = format!("fmm-install-{}-", std::process::id());
         fs::read_dir(std::env::temp_dir())
             .expect("temp dir is readable")
             .filter_map(|e| e.ok())
@@ -1030,51 +1107,91 @@ mod tests {
     static POLICY_STAGING_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn install_flow_runs_once_and_cleans_up_with_stub_pkexec() {
+    fn install_flow_stages_and_runs_once_and_cleans_up_with_stub_pkexec() {
         let _staging = POLICY_STAGING_LOCK.lock().unwrap();
         let dir = temp("install");
-        // Stub pkexec records each call and succeeds without running the install.
+        // Stub pkexec records each call (with its arguments) and succeeds
+        // without running the install.
         let counter = dir.join("calls");
+        let args_file = dir.join("args");
         let pkexec = stub(
             &dir,
             "pkexec",
-            &format!("echo x >> {}; exit 0", shell_quote(&counter)),
+            &format!(
+                "echo x >> {}; printf '%s\\n' \"$@\" >> {}; exit 0",
+                shell_quote(&counter),
+                shell_quote(&args_file)
+            ),
         );
         // Helper source: sibling "fmm-apply" in a fake exe dir.
         let exe_dir = temp("install-exe");
         let helper_src = stub(&exe_dir, "fmm-apply", "exit 0");
 
-        let before = staged_policy_count();
+        let before = staging_dir_count();
         let report = install_with(pkexec.to_str().unwrap(), Some(&helper_src)).expect("install ok");
         assert_eq!(
             report.installed,
             vec![INSTALLED_HELPER.to_string(), POLICY_INSTALLED.to_string()]
         );
-        // ONE pkexec invocation covered both files; the staged policy is gone.
+        // ONE pkexec invocation covered both files; the staging area is gone.
         assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 1);
-        assert_eq!(staged_policy_count(), before);
+        assert_eq!(staging_dir_count(), before);
+        // The privileged script referenced the staged copies, never the
+        // source on the (possibly owner-only FUSE) bundle location.
+        let args = fs::read_to_string(&args_file).unwrap();
+        let script = args.lines().nth(2).expect("pkexec ran /bin/sh -c");
+        assert!(script.contains("fmm-install-"), "script: {script}");
+        assert!(
+            !script.contains(helper_src.to_string_lossy().as_ref()),
+            "script must not reference the resolved source: {script}"
+        );
+        assert!(script.contains("org.fmm.desktop.apply.policy"));
     }
 
     #[test]
-    fn install_failure_reports_denied_and_still_cleans_up() {
+    fn install_failure_reports_the_underlying_error_and_still_cleans_up() {
         let _staging = POLICY_STAGING_LOCK.lock().unwrap();
         let dir = temp("install-fail");
         let counter = dir.join("calls");
         let pkexec = stub(
             &dir,
             "pkexec",
-            &format!("echo x >> {}; exit 3", shell_quote(&counter)),
+            &format!(
+                "echo x >> {}; echo 'install: cannot stat' >&2; exit 3",
+                shell_quote(&counter)
+            ),
+        );
+        // Helper source must exist: it is staged (copied) before pkexec runs.
+        let exe_dir = temp("install-fail-exe");
+        let helper_src = stub(&exe_dir, "fmm-apply", "exit 0");
+
+        let before = staging_dir_count();
+        let err = install_with(pkexec.to_str().unwrap(), Some(&helper_src)).unwrap_err();
+        assert_eq!(err.code, "install_failed");
+        assert!(err.message.contains("cannot stat"));
+        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 1);
+        assert_eq!(staging_dir_count(), before);
+    }
+
+    #[test]
+    fn install_with_a_vanished_source_fails_before_pkexec() {
+        let _staging = POLICY_STAGING_LOCK.lock().unwrap();
+        let dir = temp("install-vanished");
+        let counter = dir.join("calls");
+        let pkexec = stub(
+            &dir,
+            "pkexec",
+            &format!("echo x >> {}; exit 0", shell_quote(&counter)),
         );
 
-        let before = staged_policy_count();
         let err = install_with(
             pkexec.to_str().unwrap(),
             Some(Path::new("/tmp/no-such/fmm-apply")),
         )
         .unwrap_err();
-        assert_eq!(err.code, "denied");
-        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 1);
-        assert_eq!(staged_policy_count(), before);
+        // The staging copy fails with `io` before any authorization.
+        assert_eq!(err.code, "io");
+        assert!(!counter.exists());
     }
 
     #[test]
@@ -1093,16 +1210,67 @@ mod tests {
     }
 
     #[test]
-    fn write_policy_temp_stages_the_embedded_policy() {
+    fn staging_copies_the_helper_and_the_embedded_policy() {
         let _staging = POLICY_STAGING_LOCK.lock().unwrap();
-        let policy_src = write_policy_temp().expect("stage policy");
+        let staging = Staging::create().expect("create staging");
+        // Helper: a fake source binary is copied, content intact, mode 0644
+        // even though the source is 0755 (the copy is read, never executed).
+        let src_dir = temp("stage-src");
+        let helper_src = stub(&src_dir, "helper", "exit 0");
+        let helper = staging.stage_helper(&helper_src).expect("stage helper");
+        assert_eq!(helper, staging.helper_path());
+        assert_eq!(fs::read_to_string(&helper).unwrap(), "#!/bin/sh\nexit 0\n");
+        let mode = fs::metadata(&helper).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644);
+        // Policy: the embedded text is staged at mode 0644.
+        let policy = staging.stage_policy().expect("stage policy");
+        assert_eq!(policy, staging.policy_path());
         assert!(
-            fs::read_to_string(&policy_src)
+            fs::read_to_string(&policy)
                 .unwrap()
                 .contains("org.fmm.desktop.apply")
         );
-        let mode = fs::metadata(&policy_src).unwrap().permissions().mode();
+        let mode = fs::metadata(&policy).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o644);
-        fs::remove_file(&policy_src).unwrap();
+        staging.remove();
+    }
+
+    #[test]
+    fn staging_directories_are_unique_per_run() {
+        let _staging = POLICY_STAGING_LOCK.lock().unwrap();
+        let a = Staging::create().expect("first staging");
+        let b = Staging::create().expect("second staging");
+        assert_ne!(a.dir, b.dir);
+        a.remove();
+        b.remove();
+    }
+
+    #[test]
+    fn pkexec_exit_127_is_denied_and_other_failures_are_install_failed() {
+        let dir = temp("exit-codes");
+        // 127: the authorization was not obtained → denied.
+        let pkexec = stub(&dir, "pkexec", "exit 127");
+        let err = run_pkexec(pkexec.to_str().unwrap(), &[]).unwrap_err();
+        assert_eq!(err.code, "denied");
+        // 127 with pkexec's own message: still denied, message carried.
+        let pkexec = stub(
+            &dir,
+            "pkexec",
+            "echo 'Error executing command as another user: Not authorized' >&2; exit 127",
+        );
+        let err = run_pkexec(pkexec.to_str().unwrap(), &[]).unwrap_err();
+        assert_eq!(err.code, "denied");
+        assert!(err.message.contains("Not authorized"));
+        // Other non-zero: the privileged step ran and failed → install_failed
+        // with the underlying stderr.
+        let pkexec = stub(&dir, "pkexec", "echo 'install: cannot stat' >&2; exit 3");
+        let err = run_pkexec(pkexec.to_str().unwrap(), &[]).unwrap_err();
+        assert_eq!(err.code, "install_failed");
+        assert!(err.message.contains("cannot stat"));
+        // Failure without stderr: a generic, non-empty message.
+        let pkexec = stub(&dir, "pkexec", "exit 1");
+        let err = run_pkexec(pkexec.to_str().unwrap(), &[]).unwrap_err();
+        assert_eq!(err.code, "install_failed");
+        assert!(!err.message.is_empty());
     }
 }

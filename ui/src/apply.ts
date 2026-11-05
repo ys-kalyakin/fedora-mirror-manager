@@ -343,6 +343,9 @@ export function errorMessage(err: CmdErrorPayload): string {
   switch (err.code) {
     case "denied":
       return "Not authorized — the request was dismissed or denied. Nothing was changed.";
+    case "install_failed":
+      // The user authorized; show the real privileged-step failure.
+      return err.message || "The privileged install step failed.";
     case "stale_plan":
       return "The repositories changed on disk since the preview. Refresh the list and try again.";
     case "helper_missing":
