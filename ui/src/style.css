@@ -289,6 +289,43 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* Sortable column headers: real buttons for keyboard access, stripped back to
+   the header look. The glyph after the label shows the active direction; every
+   sortable header reserves its space (dimmed ↕ while unsorted) so activating a
+   sort never shifts the fixed column shares above. */
+.repo-table__sort {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.repo-table__sort:focus-visible {
+  outline: 2px solid var(--fedora-blue);
+  outline-offset: 2px;
+}
+
+.repo-table__sort::after {
+  content: "↕";
+  margin-left: 0.25rem;
+  opacity: 0.45;
+}
+
+.repo-table__th--asc .repo-table__sort::after {
+  content: "▲";
+  opacity: 1;
+}
+
+.repo-table__th--desc .repo-table__sort::after {
+  content: "▼";
+  opacity: 1;
+}
+
 .repo-table__name {
   font-weight: 600;
 }

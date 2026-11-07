@@ -39,6 +39,25 @@ const EMPTY_LABELS: Record<Layout, string> = {
   "f45-plus": "No repositories found in /usr/share/dnf5/repos.d or /etc/yum.repos.d.",
 };
 
+/** Data columns the inventory table can be sorted by. The Action column is
+    deliberately absent: it holds buttons, not data. */
+type SortColumn = "repository" | "file" | "state" | "source" | "url";
+
+type SortDir = "asc" | "desc";
+
+type SortState = { column: SortColumn; dir: SortDir };
+
+/** Header columns in display order; `sort: null` marks Action, which renders
+    as a plain, non-interactive header cell. */
+const COLUMNS: { sort: SortColumn | null; label: string }[] = [
+  { sort: "repository", label: "Repository" },
+  { sort: "file", label: "File" },
+  { sort: "state", label: "State" },
+  { sort: "source", label: "Source" },
+  { sort: "url", label: "URL" },
+  { sort: null, label: "Action" },
+];
+
 /** The repositories panel: inventory table with per-repo switch controls. */
 export function initRepos(container: HTMLElement): void {
   const header = el("div", "panel__header", "");
@@ -71,6 +90,15 @@ export function initRepos(container: HTMLElement): void {
   window.addEventListener("fmm:applied", () => void load());
   void load();
 
+  // The inventory and its table element, kept so a header click can rebuild
+  // just the table: banner, warnings and the layout hint are sort-independent,
+  // and the banner comes from an async helper call that must not be re-run.
+  let inventory: Inventory | null = null;
+  let table: HTMLTableElement | null = null;
+  // The user's column sort; null = unsorted (backend file order). Kept outside
+  // render()/load() so Refresh and fmm:applied re-renders reuse the choice.
+  let sort: SortState | null = null;
+
   function render(target: HTMLElement, inv: Inventory, banner: HTMLElement | null): void {
     target.replaceChildren();
     if (banner) {
@@ -84,19 +112,64 @@ export function initRepos(container: HTMLElement): void {
       return;
     }
     target.append(el("p", "panel__hint", LAYOUT_LABELS[inv.layout]));
+    inventory = inv;
+    table = buildTable(inv);
+    target.append(table);
+  }
+
+  // Rebuilds the table in place with the current sort (header clicks land here).
+  function rebuildTable(): void {
+    if (inventory === null || table === null) {
+      return;
+    }
+    const next = buildTable(inventory);
+    table.replaceWith(next);
+    table = next;
+  }
+
+  function buildTable(inv: Inventory): HTMLTableElement {
     const table = el("table", "repo-table", "");
     const thead = el("thead", "", "");
-    const headRow = el("tr", "", "");
-    for (const label of ["Repository", "File", "State", "Source", "URL", "Action"]) {
-      headRow.append(el("th", "", label));
-    }
-    thead.append(headRow);
+    thead.append(buildHeadRow());
     const tbody = el("tbody", "", "");
-    for (const entry of inv.entries) {
+    const entries = sort === null ? inv.entries : sortedEntries(inv.entries, sort.column, sort.dir);
+    for (const entry of entries) {
       tbody.append(row(entry, inv.layout === "f45-plus"));
     }
     table.append(thead, tbody);
-    target.append(table);
+    return table;
+  }
+
+  // Every data column is a button (first click sorts ascending, a second click
+  // on the same header reverses); Action stays a plain header cell.
+  function buildHeadRow(): HTMLTableRowElement {
+    const headRow = el("tr", "", "");
+    for (const column of COLUMNS) {
+      const key = column.sort;
+      if (key === null) {
+        headRow.append(el("th", "", column.label));
+        continue;
+      }
+      const th = el("th", "", "");
+      const active = sort !== null && sort.column === key ? sort.dir : null;
+      if (active !== null) {
+        th.classList.add(active === "asc" ? "repo-table__th--asc" : "repo-table__th--desc");
+        th.setAttribute("aria-sort", active === "asc" ? "ascending" : "descending");
+      }
+      const button = el("button", "repo-table__sort", column.label);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        if (sort !== null && sort.column === key) {
+          sort.dir = sort.dir === "asc" ? "desc" : "asc";
+        } else {
+          sort = { column: key, dir: "asc" };
+        }
+        rebuildTable();
+      });
+      th.append(button);
+      headRow.append(th);
+    }
+    return headRow;
   }
 
   function row(entry: RepoEntry, showOrigin: boolean): HTMLTableRowElement {
@@ -246,6 +319,40 @@ export function initRepos(container: HTMLElement): void {
     } catch (err) {
       showErrorDialog(err as { code: string; message: string });
     }
+  }
+}
+
+/** Orders entries by column and direction. Text columns compare
+    case-insensitively, State ascending puts disabled first (false < true), and
+    an entry without a URL sorts after any URL in both directions. Array#sort
+    is stable, so entries with equal keys keep the delivered (file) order. The
+    input array is copied, never mutated: the unsorted copy of the inventory
+    stays the "default order" state. */
+function sortedEntries(entries: RepoEntry[], column: SortColumn, dir: SortDir): RepoEntry[] {
+  return [...entries].sort((a, b) => {
+    // Applied before the direction flip, so a missing URL is last either way.
+    if (column === "url" && (a.url === null || b.url === null)) {
+      return a.url === b.url ? 0 : a.url === null ? 1 : -1;
+    }
+    const cmp = compareBy(a, b, column);
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
+
+/** Ascending comparison of two entries by column; the caller has already
+    ordered missing URLs last, so both URLs exist in the url case. */
+function compareBy(a: RepoEntry, b: RepoEntry, column: SortColumn): number {
+  switch (column) {
+    case "repository":
+      return a.id.localeCompare(b.id, undefined, { sensitivity: "base" });
+    case "file":
+      return a.file.localeCompare(b.file, undefined, { sensitivity: "base" });
+    case "state":
+      return Number(a.enabled) - Number(b.enabled);
+    case "source":
+      return SOURCE_LABELS[a.source].localeCompare(SOURCE_LABELS[b.source], undefined, { sensitivity: "base" });
+    case "url":
+      return (a.url ?? "").localeCompare(b.url ?? "", undefined, { sensitivity: "base" });
   }
 }
 
